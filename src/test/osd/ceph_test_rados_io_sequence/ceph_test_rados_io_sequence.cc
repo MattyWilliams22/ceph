@@ -1006,7 +1006,10 @@ void ceph::io_sequence::tester::SelectErasurePool::configureServices(
                                         std::nullopt};
       rc = send_mon_command(allow_ec_optimisations_request, rados,
                             "OSDPoolSetRequest", {}, &outbl, formatter.get());
-      ceph_assert(rc == 0);
+      if (rc != 0) {
+        throw std::invalid_argument(fmt::format("ec optimisations may not be enabled "
+                                                "for the specified plugin type"));
+      }
     }
 
     if (allow_pool_ec_overwrites) {
