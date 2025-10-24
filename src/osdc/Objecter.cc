@@ -2343,8 +2343,6 @@ void Objecter::op_submit(Op *op, ceph_tid_t *ptid, int *ctx_budget)
 
   if (!was_split) {
     _op_submit_with_budget(op, rl, ptid, ctx_budget);
-  } else {
-    logger->inc(l_osdc_split_op_reads);
   }
 }
 
@@ -2353,6 +2351,9 @@ void Objecter::_op_submit_with_budget(Op *op,
 				      ceph_tid_t *ptid,
 				      int *ctx_budget)
 {
+  if (op->target.force_shard) {
+    logger->inc(l_osdc_split_op_reads);
+  }
   ceph_assert(initialized);
 
   ceph_assert(op->ops.size() == op->out_bl.size());
@@ -2485,17 +2486,20 @@ void Objecter::_op_submit(Op *op, shunique_lock<ceph::shared_mutex>& sul, ceph_t
   OSDSession *s = NULL;
 
   bool check_for_latest_map = false;
-  int r = _calc_target(&op->target);
-  switch(r) {
-  case RECALC_OP_TARGET_POOL_DNE:
-    check_for_latest_map = true;
-    break;
-  case RECALC_OP_TARGET_POOL_EIO:
-    if (op->has_completion()) {
-      op->complete(make_error_code(osdc_errc::pool_eio), -EIO,
-		   service.get_executor());
+  int r = 0;
+  if ((op->target.flags & CEPH_OSD_FLAG_EC_DIRECT_READ) == 0) {
+    r = _calc_target(&op->target);
+    switch(r) {
+    case RECALC_OP_TARGET_POOL_DNE:
+      check_for_latest_map = true;
+      break;
+    case RECALC_OP_TARGET_POOL_EIO:
+      if (op->has_completion()) {
+        op->complete(make_error_code(osdc_errc::pool_eio), -EIO,
+                     service.get_executor());
+      }
+      return;
     }
-    return;
   }
 
   // Try to get a session, including a retry if we need to take write lock
@@ -3103,7 +3107,7 @@ int Objecter::_calc_target(op_target_t *t, bool any_change)
         return RECALC_OP_TARGET_POOL_DNE;
       }
       if (pi->is_erasure()) {
-        spgid.reset_shard(osdmap->pgtemp_undo_primaryfirst(*pi, actual_pgid, *t->force_shard));
+        spgid.reset_shard(*t->force_shard);
       }
     } else if (pi->is_erasure()) {
       // Optimized EC pools need to be careful when calculating the shard
@@ -3737,7 +3741,7 @@ void Objecter::handle_osd_op_reply(MOSDOpReply *m)
     }
   }
 
-  if (rc == -EAGAIN && !op->target.force_shard) {
+  if (rc == -EAGAIN && (op->target.flags & CEPH_OSD_FLAG_FAIL_ON_EAGAIN) == 0) {
     ldout(cct, 7) << " got -EAGAIN, resubmitting" << dendl;
     if (op->has_completion())
       num_in_flight--;
@@ -3745,8 +3749,12 @@ void Objecter::handle_osd_op_reply(MOSDOpReply *m)
     sl.unlock();
 
     op->tid = 0;
-    op->target.flags &= ~(CEPH_OSD_FLAG_BALANCE_READS |
-			  CEPH_OSD_FLAG_LOCALIZE_READS);
+    op->target.flags &= ~CEPH_OSD_FLAGS_DIRECT_READ;
+
+    // If IGNORE_EAGAIN is not set and force_shard is set, the implication is
+    // that it is safe to redrive the IO to the primary, without any balanced
+    // read flag.
+    op->target.force_shard.reset();
     op->target.pgid = pg_t();
     _op_submit(op, sul, NULL);
     m->put();
