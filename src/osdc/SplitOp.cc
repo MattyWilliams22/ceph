@@ -445,11 +445,6 @@ std::pair<bool, bool> validate(Objecter::Op *op, const pg_pool_t *pi, CephContex
       case CEPH_OSD_OP_OMAPGETVALS:
       case CEPH_OSD_OP_OMAPGETVALSBYKEYS:
       case CEPH_OSD_OP_OMAPGETHEADER:
-      case CEPH_OSD_OP_OMAPSETVALS:
-      case CEPH_OSD_OP_OMAPCLEAR:
-      case CEPH_OSD_OP_OMAPSETHEADER:
-      case CEPH_OSD_OP_OMAPRMKEYS:
-      case CEPH_OSD_OP_OMAPRMKEYRANGE:
       case CEPH_OSD_OP_OMAP_CMP:
       case CEPH_OSD_OP_GETXATTRS:
       case CEPH_OSD_OP_CHECKSUM:
