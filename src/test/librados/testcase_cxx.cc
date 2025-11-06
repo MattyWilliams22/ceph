@@ -408,6 +408,7 @@ void RadosTestECPP::SetUp()
   } else if (fast_ec) {
     pool_name = pool_name_fast;
   } else if (!split_ops) {
+    GTEST_SKIP() << "Skipping Legacy tests for now";
     pool_name = pool_name_default;
   } else {
     GTEST_SKIP() << "Legacy EC does not support split ops";

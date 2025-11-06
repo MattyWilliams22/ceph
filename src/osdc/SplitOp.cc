@@ -381,7 +381,12 @@ static bool validate(Objecter::Op *op, bool is_erasure, CephContext *cct) {
       case CEPH_OSD_OP_GETXATTRS:
       case CEPH_OSD_OP_CHECKSUM:
       case CEPH_OSD_OP_GETXATTR:
-      case CEPH_OSD_OP_CMPXATTR: {
+      case CEPH_OSD_OP_CMPXATTR:
+      case CEPH_OSD_OP_OMAPGETKEYS:
+      case CEPH_OSD_OP_OMAPGETVALS:
+      case CEPH_OSD_OP_OMAPGETVALSBYKEYS:
+      case CEPH_OSD_OP_OMAP_CMP:
+      case CEPH_OSD_OP_OMAPGETHEADER: {
         break; // Do not block validate.
       }
       case CEPH_OSD_OP_CALL: {
