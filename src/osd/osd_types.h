@@ -1808,7 +1808,6 @@ public:
 
   bool supports_omap() const {
     return true;
-    // return !(get_type() == TYPE_ERASURE);
   }
 
   bool requires_aligned_append() const {
