@@ -4079,7 +4079,7 @@ public:
   public:
     virtual void append(uint64_t old_offset) {}
     virtual void setattrs(std::map<std::string, std::optional<ceph::buffer::list>> &attrs) {}
-    virtual void ec_omap(bool clear_omap, std::optional<ceph::buffer::list> omap_header, 
+    virtual void ec_omap(bool clear_omap, std::optional<ceph::buffer::list> omap_header,
       std::vector<std::pair<OmapUpdateType, ceph::buffer::list>> &omap_updates) {}
     virtual void rmobject(version_t old_version) {}
     /**
@@ -4162,7 +4162,7 @@ public:
     encode(old_attrs, bl);
     ENCODE_FINISH(bl);
   }
-  void ec_omap(bool clear_omap, std::optional<ceph::buffer::list> omap_header, 
+  void ec_omap(bool clear_omap, std::optional<ceph::buffer::list> omap_header,
     std::vector<std::pair<OmapUpdateType, ceph::buffer::list>> &omap_updates) {
     if(!can_local_rollback) {
       return;
