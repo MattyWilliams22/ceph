@@ -191,7 +191,66 @@ TEST_P(LibRadosOmapECPP, OmapReads) {
 
 }
 
-TEST_P(LibRadosOmapECPP, ErrorInject) {
+TEST_P(LibRadosOmapECPP, OmapRecovery) {
+  SKIP_IF_CRIMSON();
+  bufferlist bl_write, omap_val_bl, xattr_val_bl;
+  const std::string omap_key_1 = "key_a";
+  const std::string omap_key_2 = "key_b";
+  const std::string omap_value = "val_c";
+  encode(omap_value, omap_val_bl);
+  std::map<std::string, bufferlist> omap_map = {
+    {omap_key_1, omap_val_bl},
+    {omap_key_2, omap_val_bl}
+  };
+  const std::string xattr_key = "xattr_key_1";
+  const std::string xattr_value = "xattr_value_2";
+  encode(xattr_value, xattr_val_bl);
+  bl_write.append("ceph");
+
+  // 1. Write data to omap
+  ObjectWriteOperation write1;
+  write1.write(0, bl_write);
+  write1.omap_set(omap_map);
+  int ret = ioctx.operate("error_inject_oid", &write1);
+  EXPECT_EQ(ret, 0);
+
+  // 2. Find up osds
+  ceph::messaging::osd::OSDMapReply reply;
+  int res = request_osd_map(pool_name, "error_inject_oid", nspace, &reply);
+  EXPECT_TRUE(res == 0);
+  std::vector<int> prev_up_osds = reply.up;
+  std::string pgid = reply.pgid;
+  print_osd_map("Previous up osds: ", prev_up_osds);
+
+  // 3. Find unused osd to be new primary
+  int prev_primary = prev_up_osds[0];
+  int new_primary = 0;
+  while (true) {
+    auto it = std::find(prev_up_osds.begin(), prev_up_osds.end(), new_primary);
+    if (it == prev_up_osds.end()) {
+      break;
+    }
+    new_primary++;
+  }
+  std::vector<int> new_up_osds = prev_up_osds;
+  new_up_osds[0] = new_primary;
+  std::cout << "Previous primary osd: " << prev_primary << std::endl;
+  std::cout << "New primary osd: " << new_primary << std::endl;
+  print_osd_map("Desired up osds: ", new_up_osds);
+
+  // 4. Set new up map
+  int rc = set_osd_upmap(pgid, new_up_osds);
+  EXPECT_TRUE(rc == 0);
+
+  // 5. Wait for new upmap to appear as acting set of osds
+  int res2 = wait_for_upmap(pool_name, "error_inject_oid", nspace, new_primary, 30s);
+  EXPECT_TRUE(res2 == 0);
+
+  // 6. Read omap after switching primary osd
+  check_omap_read("error_inject_oid", omap_key_1, omap_value, 2, 0);
+}
+
+TEST_P(LibRadosOmapECPP, ReadDuringRecovery) {
   SKIP_IF_CRIMSON();
   bufferlist bl_write, omap_val_bl, xattr_val_bl;
   const std::string omap_key_1 = "key_a";
@@ -220,8 +279,7 @@ TEST_P(LibRadosOmapECPP, ErrorInject) {
   EXPECT_EQ(ret, 0);
 
   // 2. Set osd_debug_reject_backfill_probability to 1.0
-  CephContext* cct = static_cast<CephContext*>(cluster.cct());
-  cct->_conf->osd_debug_reject_backfill_probability = 1.0;
+  set_config_value("osd_debug_reject_backfill_probability", "1.0");
 
   // 3. Read xattrs before switching primary osd
   check_xattr_read("error_inject_oid", xattr_key, xattr_value, 1, 1, 0);
@@ -258,14 +316,14 @@ TEST_P(LibRadosOmapECPP, ErrorInject) {
   int res2 = wait_for_upmap(pool_name, "error_inject_oid", nspace, new_primary, 30s);
   EXPECT_TRUE(res2 == 0);
   
-  // 8a. Read omap
+  // 8a. Read omap after switching primary osd
   check_omap_read("error_inject_oid", omap_key_1, omap_value, 2, 0);
 
   // 8b. Read xattrs after switching primary osd
   check_xattr_read("error_inject_oid", xattr_key, xattr_value, 1, 1, 0);
 
   // 9. Set osd_debug_reject_backfill_probability to 0.0
-  cct->_conf->osd_debug_reject_backfill_probability = 0.0;
+  set_config_value("osd_debug_reject_backfill_probability", "0.0");
 
   // 10. Reset up map to previous values
   int rc2 = set_osd_upmap(pgid, prev_up_osds);

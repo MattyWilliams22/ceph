@@ -5,6 +5,8 @@
 
 #include <chrono>
 #include <thread>
+#include <cstdlib>
+#include <string>
 
 #include <errno.h>
 #include <fmt/format.h>
@@ -49,6 +51,79 @@ std::vector<int> RadosTestECPP::get_osd_ids() {
   }
 
   return osd_ids;
+}
+
+void RadosTestECPP::set_config_value(std::string key, std::string value)
+{
+
+  std::string set_cmd = "ceph tell osd.* config set " + key + " " + value;
+  execute_shell_command(set_cmd);
+
+  wait_for_config_changes(key, value);
+}
+
+void RadosTestECPP::execute_shell_command(const std::string& cmd) {
+  // We append " > /dev/null 2>&1" to suppress output,
+  // or remove it if you want to see the command output in your test logs.
+  std::string full_cmd = "cd /work/ceph/build && source ./vstart_environment.sh && " + cmd + " 2>&1";
+
+  int ret = std::system(full_cmd.c_str());
+
+  // WEXITSTATUS extracts the actual return code from the shell
+  if (ret == -1 || WEXITSTATUS(ret) != 0) {
+    std::cerr << "Command failed: " << full_cmd << std::endl;
+    // Fail the test if the command fails
+    ASSERT_TRUE(false) << "Shell command failed";
+  }
+}
+
+std::string RadosTestECPP::exec_with_output(const std::string& cmd) {
+  std::array<char, 128> buffer;
+  std::string result;
+
+  std::string full_cmd = "cd /work/ceph/build && source ./vstart_environment.sh && " + cmd;
+
+  // Open a pipe to the command (read mode "r")
+  // We append "2>&1" to capture stderr inside stdout if you want both.
+  std::unique_ptr<FILE, decltype(&pclose)> pipe(popen(full_cmd.c_str(), "r"), pclose);
+
+  if (!pipe) {
+    throw std::runtime_error("popen() failed!");
+  }
+
+  // Read the output chunk by chunk
+  while (fgets(buffer.data(), buffer.size(), pipe.get()) != nullptr) {
+    result += buffer.data();
+  }
+
+  return result;
+}
+
+void RadosTestECPP::wait_for_config_changes(std::string key, std::string value)
+{
+  std::vector<int> osds = get_osd_ids();
+  int max_retries = 20;
+  for (auto osd : osds) {
+    std::string target_osd = "osd." + std::to_string(osd);
+    bool osd_ready = false;
+
+    for (int i = 0; i < max_retries; ++i) {
+      std::string cmd = "ceph tell " + target_osd + " config get " + key;
+      std::string result = exec_with_output(cmd);
+      std::cout << result << std::endl;
+
+      if (result.find(value) != std::string::npos) {
+        std::cout << target_osd << " has value " << value << " for " << key << std::endl;
+        osd_ready = true;
+        break;
+      }
+      usleep(500000); // 500ms
+    }
+
+    if (!osd_ready) {
+      EXPECT_TRUE(false) << "Timed out waiting for " << target_osd << " to update " << key;
+    }
+  }
 }
 
 void RadosTestECPP::freeze_omap_journal() {
@@ -681,10 +756,12 @@ void RadosTestECPP::check_omap_read(
   EXPECT_EQ(err, expected_err);
   EXPECT_EQ(vals_read.size(), expected_size);
   EXPECT_NE(vals_read.find(omap_key), vals_read.end());
-  bufferlist val_read_bl = vals_read[omap_key];
-  std::string val_read;
-  decode(val_read, val_read_bl);
-  EXPECT_EQ(omap_value, val_read);
+  if (vals_read.find(omap_key) != vals_read.end()) {
+    bufferlist val_read_bl = vals_read[omap_key];
+    std::string val_read;
+    decode(val_read, val_read_bl);
+    EXPECT_EQ(omap_value, val_read);
+  }
 }
 
 void RadosTestECPP::print_osd_map(std::string message, std::vector<int> osd_vec) {

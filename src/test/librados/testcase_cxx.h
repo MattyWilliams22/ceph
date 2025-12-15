@@ -134,6 +134,10 @@ protected:
   std::vector<int> get_osd_ids();
   void freeze_omap_journal();
   void unfreeze_omap_journal();
+  void set_config_value(std::string key, std::string value);
+  void execute_shell_command(const std::string& cmd);
+  std::string exec_with_output(const std::string& cmd);
+  void wait_for_config_changes(std::string key, std::string value);
   void write_omap_keys(
     std::string oid, 
     int min_index, 
