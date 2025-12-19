@@ -352,6 +352,8 @@ struct Trimmer : public ObjectModDesc::Visitor {
       soid,
       old_version,
       t);
+
+    pg->trim_delete_from_journal(soid, old_version);
   }
   // try_rmobject defaults to rmobject
   void rollback_extents(
