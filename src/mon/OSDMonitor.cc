@@ -6508,9 +6508,9 @@ bool OSDMonitor::preprocess_command(MonOpRequestRef op)
 	    f->dump_bool("allow_ec_optimizations",
 			 p->has_flag(pg_pool_t::FLAG_EC_OPTIMIZATIONS));
 	    break;
-          case SUPPORTS_OMAP:
-            f->dump_bool("supports_omap", p->supports_omap());
-            break;
+	  case SUPPORTS_OMAP:
+	    f->dump_bool("supports_omap", p->supports_omap());
+	    break;
 	}
       }
       f->close_section();
@@ -9057,8 +9057,8 @@ int OSDMonitor::prepare_command_pool_set(const cmdmap_t& cmdmap,
       ss << "supports_omap cannot be disabled once enabled";
       return -EINVAL;
     }
-    if ((val == "true") && p.is_erasure()) {
-      ss << "supports_omap cannot be enabled in ec pools";
+    if ((val == "true") && p.is_erasure() && !p.allows_ecoptimizations()) {
+      ss << "supports_omap cannot be enabled in legacy ec pools";
       return -EINVAL;
     }
     if (val == "true") {
