@@ -421,6 +421,17 @@ void ECBackend::handle_sub_write(
   switcher->clear_temp_objs(op.temp_removed);
   dout(30) << __func__ << " missing before " <<
     get_parent()->get_log().get_missing().get_items() << dendl;
+
+  // Update EC omap journal on non-primary shards from log entries
+  // This ensures the journal has the correct generation info when transactions are applied
+  if (!get_parent()->pgb_is_primary()) {
+    for (auto &&e: op.log_entries) {
+      if (e.is_delete() || e.is_lost_delete()) {
+        ec_omap_journal.append_delete(e.soid, e.version.version, e.is_lost_delete());
+      }
+    }
+  }
+
   // flag set to true during async recovery
   bool async = false;
   pg_missing_tracker_t pmissing = get_parent()->get_local_missing();
@@ -582,10 +593,11 @@ void ECBackend::handle_sub_read(
       continue;
     }
     bufferlist bl;
-    int r = switcher->store->omap_get_header(
+    int r = omap_get_header(
       switcher->ch,
       ghobject_t(*i, ghobject_t::NO_GEN, shard),
-      &reply->omap_headers_read[*i], false);
+      &reply->omap_headers_read[*i], false,
+      switcher->store);
     if (r < 0) {
       // If we read error, we should not return the omap header too.
       reply->omap_headers_read.erase(*i);
@@ -606,7 +618,7 @@ void ECBackend::handle_sub_read(
     reply->omaps_complete[hoid] = false;
 
     uint64_t available = max_bytes;
-    const auto result = switcher->store->omap_iterate(
+    const auto result = omap_iterate(
       switcher->ch,
       ghobject_t(hoid, ghobject_t::NO_GEN, shard),
       ObjectStore::omap_iter_seek_t{
@@ -615,7 +627,7 @@ void ECBackend::handle_sub_read(
       },
       [max_entries=cct->_conf->osd_recovery_max_omap_entries_per_chunk, &available, &current_batch]
       (const std::string_view key, const std::string_view value) {
-        const auto num_new_bytes = key.size() + value.size(); 
+        const auto num_new_bytes = key.size() + value.size();
         if (auto cur_num_entries = current_batch.size(); cur_num_entries > 0) {
 	  if (max_entries > 0 && cur_num_entries >= max_entries) {
             return ObjectStore::omap_iter_ret_t::STOP;
@@ -629,7 +641,7 @@ void ECBackend::handle_sub_read(
         current_batch.insert(make_pair(key, val_bl));
         available -= std::min(available, num_new_bytes);
         return ObjectStore::omap_iter_ret_t::NEXT;
-      });
+      }, switcher->store);
 
     if (result < 0) {
       reply->errors[hoid] = result;
@@ -964,6 +976,7 @@ void ECBackend::check_recovery_sources(const OSDMapRef &osdmap) {
 }
 
 void ECBackend::on_change() {
+  ec_omap_journal.clear_all();
   rmw_pipeline.on_change();
   read_pipeline.on_change();
   rmw_pipeline.on_change2();
@@ -1022,7 +1035,8 @@ struct ECClassicalOp : ECCommon::RMWPipeline::Op {
       &temp_added,
       &temp_cleared,
       dpp,
-      osdmap);
+      osdmap,
+      pipeline->ec_backend.ec_omap_journal);
   }
 
   bool skip_transaction(
