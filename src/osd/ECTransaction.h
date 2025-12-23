@@ -21,6 +21,7 @@
 #include "os/Transaction.h"
 #include "OSDMap.h"
 #include "PGTransaction.h"
+#include "osd/ECOmapJournal.h"
 
 namespace ECTransaction {
 class WritePlanObj {
@@ -122,7 +123,8 @@ class Generate {
     WritePlanObj &plan,
     DoutPrefixProvider *dpp,
     pg_log_entry_t *entry,
-    bool &first_write_in_interval);
+    bool &first_write_in_interval,
+    ECOmapJournal &ec_omap_journal);
 };
 
 void generate_transactions(
@@ -139,6 +141,7 @@ void generate_transactions(
     std::set<hobject_t> *temp_removed,
     DoutPrefixProvider *dpp,
     const OSDMapRef &osdmap,
-    bool &first_write_in_interval
+    bool &first_write_in_interval,
+    ECOmapJournal &ec_omap_journal
   );
 }

@@ -470,7 +470,8 @@ ECTransaction::Generate::Generate(PGTransaction &t,
     WritePlanObj &plan,
     DoutPrefixProvider *dpp,
     pg_log_entry_t *entry,
-    bool &first_write_in_interval)
+    bool &first_write_in_interval,
+    ECOmapJournal &ec_omap_journal)
   : t(t),
     ec_impl(ec_impl),
     pgid(pgid),
@@ -533,9 +534,6 @@ ECTransaction::Generate::Generate(PGTransaction &t,
   }
 
   process_init();
-
-  // omap not supported (except 0, handled above)
-  ceph_assert(!(op.clear_omap) && !(op.omap_header) && op.omap_updates.empty());
 
   if (op.alloc_hint) {
     all_shards_written();
@@ -607,6 +605,15 @@ ECTransaction::Generate::Generate(PGTransaction &t,
 
   if (!xattr_rollback.empty()) {
     entry->mod_desc.setattrs(xattr_rollback);
+  }
+
+  if (!op.omap_updates.empty() || op.clear_omap || op.omap_header) {
+    ECOmapJournalEntry new_entry(entry->version, op.clear_omap, op.omap_header, op.omap_updates);
+    entry->mod_desc.ec_omap(
+      op.clear_omap,
+      op.omap_header,
+      op.omap_updates);
+    ec_omap_journal.add_entry(plan.hoid, new_entry);
   }
 
   /* It is essential for rollback that every shard with a non-empty transaction
@@ -1011,7 +1018,8 @@ void ECTransaction::generate_transactions(
     set<hobject_t> *temp_removed,
     DoutPrefixProvider *dpp,
     const OSDMapRef &osdmap,
-    bool &first_write_in_interval) {
+    bool &first_write_in_interval,
+    ECOmapJournal &ec_omap_journal) {
   ceph_assert(written_map);
   ceph_assert(transactions);
   ceph_assert(temp_added);
@@ -1044,7 +1052,8 @@ void ECTransaction::generate_transactions(
       ceph_assert(plan.hoid == oid);
 
       Generate generate(t, ec_impl, pgid, sinfo, partial_extents, written_map,
-        *transactions, osdmap, oid, op, plan, dpp, entry, first_write_in_interval);
+        *transactions, osdmap, oid, op, plan, dpp, entry,
+        first_write_in_interval, ec_omap_journal);
 
       plans.plans.pop_front();
   });
