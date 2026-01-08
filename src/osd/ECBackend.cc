@@ -1001,7 +1001,34 @@ void ECBackend::submit_transaction(
   rmw_pipeline.start_rmw(std::move(op));
 }
 
-int ECBackend::objects_read_sync(
+int ECBackend::objects_read_sync(const hobject_t &hoid, uint64_t off, uint64_t len,
+                      uint32_t op_flags, ceph::buffer::list *bl) {
+  C_SaferCond on_finish;
+  ec_align_t align{off, len, op_flags};
+  list<pair<ec_align_t, pair<bufferlist*, Context*>>> async_request;
+  async_request.push_back({ align, { bl, nullptr } });
+  uint64_t object_size = off + len;
+
+  objects_read_async(
+    hoid,
+    object_size,
+    async_request,
+    &on_finish,
+    true
+  );
+
+  // mock_read(
+  //   hoid,
+  //   object_size,
+  //   async_request,
+  //   &on_finish,
+  //   true
+  // );
+
+  return on_finish.wait();
+}
+
+int ECBackend::objects_read_local(
     const hobject_t &hoid,
     uint64_t off,
     uint64_t len,
@@ -1091,6 +1118,54 @@ int ECBackend::objects_readv_sync(const hobject_t &hoid,
   }
 
   return 0;
+}
+
+void ECBackend::mock_read(const hobject_t &hoid,
+    uint64_t object_size,
+    const list<pair<ec_align_t,
+                    pair<bufferlist*, Context*>>> &to_read,
+    Context *on_complete,
+    bool fast_read) {
+
+  // 1. Define the mock data string you expect in your test
+  std::string mock_data = "Hello, world!";
+
+  // 2. Iterate over every requested read extent in the list
+  for (const auto &item : to_read) {
+    // Unpack the request
+    const ec_align_t &extent = item.first;       // Contains offset and size
+    bufferlist *out_bl = item.second.first;      // The pointer to the output buffer
+    Context *sub_op_ctx = item.second.second;    // The callback for this specific extent
+
+    // 3. Generate data to fill the requested size
+    bufferlist valid_data;
+
+    // Repeat the mock string until we cover the requested size
+    while (valid_data.length() < extent.size) {
+      valid_data.append(mock_data);
+    }
+
+    // Trim the buffer to the exact requested length
+    bufferlist final_bl;
+    final_bl.substr_of(valid_data, 0, extent.size);
+
+    // 4. Place the data into the output buffer
+    if (out_bl) {
+      *out_bl = final_bl;
+    }
+
+    // 5. Trigger the per-extent callback (e.g. FillInVerifyExtent)
+    // Pass the number of bytes read as the argument (success)
+    if (sub_op_ctx) {
+      sub_op_ctx->complete(extent.size);
+    }
+  }
+
+  // 6. Trigger the main completion callback (e.g. ReadFinisher)
+  // Pass 0 to indicate overall success
+  if (on_complete) {
+    on_complete->complete(0);
+  }
 }
 
 void ECBackend::objects_read_async(

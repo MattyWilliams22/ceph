@@ -264,7 +264,16 @@ public:
     if (is_optimized()) {
       return optimized.objects_read_sync(hoid, off, len, op_flags, bl);
     }
-    return legacy.objects_read_sync(hoid, off, len, op_flags, bl);
+    ceph_abort_msg("Sync reads legacy EC");
+  }
+
+  int objects_read_local(const hobject_t &hoid, uint64_t off, uint64_t len,
+                      uint32_t op_flags, ceph::buffer::list *bl) override
+  {
+    if (is_optimized()) {
+      return optimized.objects_read_local(hoid, off, len, op_flags, bl);
+    }
+    return legacy.objects_read_local(hoid, off, len, op_flags, bl);
   }
 
   int objects_readv_sync(const hobject_t &hoid,

@@ -6148,10 +6148,11 @@ int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
       break;
 
     case CEPH_OSD_OP_SYNC_READ:
-      if (pool.info.is_erasure()) {
+      if (pool.info.is_erasure() && !pool.info.allows_ecoptimizations()) {
 	result = -EOPNOTSUPP;
 	break;
       }
+      ctx->op->set_ec_direct_read();
       // fall through
     case CEPH_OSD_OP_READ:
       ++ctx->num_read;
