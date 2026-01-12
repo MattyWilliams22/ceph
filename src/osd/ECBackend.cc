@@ -17,18 +17,21 @@
 
 #include <iostream>
 
-#include "ECInject.h"
-#include "messages/MOSDPGPush.h"
-#include "messages/MOSDPGPushReply.h"
-#include "messages/MOSDECSubOpWrite.h"
-#include "messages/MOSDECSubOpWriteReply.h"
+#include "common/debug.h"
+
+#include <boost/asio/spawn.hpp>
+
 #include "messages/MOSDECSubOpRead.h"
 #include "messages/MOSDECSubOpReadReply.h"
-#include "common/debug.h"
-#include "ECMsgTypes.h"
-#include "ECTypes.h"
-#include "ECSwitch.h"
+#include "messages/MOSDECSubOpWrite.h"
+#include "messages/MOSDECSubOpWriteReply.h"
+#include "messages/MOSDPGPush.h"
+#include "messages/MOSDPGPushReply.h"
 
+#include "ECInject.h"
+#include "ECMsgTypes.h"
+#include "ECSwitch.h"
+#include "ECTypes.h"
 #include "PrimaryLogPG.h"
 
 #define dout_context cct
@@ -1001,31 +1004,69 @@ void ECBackend::submit_transaction(
   rmw_pipeline.start_rmw(std::move(op));
 }
 
+template <typename CompletionToken>
+auto async_read_bridge(ECBackend *ecbackend,
+                          const hobject_t &hoid,
+                          uint64_t object_size,
+                          const list<pair<ec_align_t, pair<bufferlist*, Context*>>> &to_read,
+                          CompletionToken&& token)
+{
+  return boost::asio::async_initiate<CompletionToken, void(int)>(
+      [ecbackend, hoid, object_size, to_read](auto handler) {
+
+          auto executor = boost::asio::get_associated_executor(handler);
+          auto handler_ptr = std::make_shared<std::decay_t<decltype(handler)>>(std::move(handler));
+          Context *on_finish = new LambdaContext([handler_ptr, executor](int r) mutable {
+              boost::asio::post(executor, [handler_ptr, r]() mutable {
+                  (*handler_ptr)(r);
+              });
+          });
+
+          ecbackend->objects_read_async(
+              hoid,
+              object_size,
+              to_read,
+              on_finish,
+              true
+          );
+      },
+      token);
+}
+
 int ECBackend::objects_read_sync(const hobject_t &hoid, uint64_t off, uint64_t len,
-                      uint32_t op_flags, ceph::buffer::list *bl) {
-  C_SaferCond on_finish;
-  ec_align_t align{off, len, op_flags};
-  list<pair<ec_align_t, pair<bufferlist*, Context*>>> async_request;
-  async_request.push_back({ align, { bl, nullptr } });
-  uint64_t object_size = off + len;
+    uint32_t op_flags, ceph::buffer::list *bl) {
+  boost::asio::io_context io_context;
+  dout(5) << "DEBUG: Setup complete. About to spawn." << dendl;
+  int result = 0;
 
-  objects_read_async(
-    hoid,
-    object_size,
-    async_request,
-    &on_finish,
-    true
-  );
+  (void)boost::asio::spawn(io_context, [&](boost::asio::yield_context yield) {
+    dout(5) << "DEBUG: Coroutine STARTED." << dendl;
 
-  // mock_read(
-  //   hoid,
-  //   object_size,
-  //   async_request,
-  //   &on_finish,
-  //   true
-  // );
+    ec_align_t align{off, len, op_flags};
 
-  return on_finish.wait();
+    // Is it okay to use a nullptr here for the callbacks?
+    list<pair<ec_align_t, pair<bufferlist*, Context*>>> async_request;
+    async_request.push_back({ align, { bl, nullptr } });
+
+    // Is this the right way to get the object_size?
+    const uint64_t object_size = off + len;
+
+    const int r = async_read_bridge(
+        this,
+        hoid,
+        object_size,
+        async_request,
+        yield
+    );
+    dout(5) << "DEBUG: Coroutine FINISHED. Result: " << r << dendl;
+    result = r;
+  });
+
+  dout(5) << "DEBUG: Calling run()." << dendl;
+  io_context.run();
+  dout(5) << "DEBUG: run() returned." << dendl;
+
+  return result;
 }
 
 int ECBackend::objects_read_local(
