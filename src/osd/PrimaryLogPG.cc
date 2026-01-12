@@ -5896,10 +5896,11 @@ int PrimaryLogPG::do_read(OpContext *ctx, OSDOp& osd_op) {
       maybe_crc = oi.data_digest;
 
     if (ctx->op->ec_direct_read()) {
+      pg_unlock();
       result = pgbackend->objects_read_sync(
         soid, op.extent.offset, op.extent.length, op.flags, &osd_op.outdata);
-
-        dout(20) << " EC sync read for " << soid << " result=" << result << dendl;
+      pg_lock();
+      dout(20) << " EC sync read for " << soid << " result=" << result << dendl;
     } else {
     ctx->pending_async_reads.push_back(
       make_pair(
