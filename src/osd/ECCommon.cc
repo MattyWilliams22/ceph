@@ -460,13 +460,13 @@ void ECCommon::ReadPipeline::start_read_op(
 void ECCommon::ReadPipeline::do_read_op(ReadOp &rop) {
   const int priority = rop.priority;
   const ceph_tid_t tid = rop.tid;
-  bool reads_sent = false;
 
   dout(10) << __func__ << ": starting read " << rop << dendl;
   ceph_assert(!rop.to_read.empty());
 
   map<pg_shard_t, ECSubRead> messages;
   for (auto &&[hoid, read_request]: rop.to_read) {
+    bool reads_sent = false;
     bool need_attrs = read_request.want_attrs;
 
     for (auto &&[shard, shard_read]: read_request.shard_reads) {
@@ -1320,7 +1320,7 @@ struct RecoveryReadCompleter : ECCommon::ReadCompleter {
       backend._failed_push(hoid, res);
       return;
     }
-    ceph_assert(req.to_read.size() == 0);
+    ceph_assert(req.to_read.empty());
     backend.handle_recovery_read_complete(
       hoid,
       std::move(res),
@@ -1411,11 +1411,16 @@ void ECCommon::RecoveryBackend::continue_recovery_op(
        */
       uint64_t read_size = get_recovery_chunk_size();
       if (op.obc) {
-        uint64_t read_to_end = ECUtil::align_next(op.obc->obs.oi.size) -
-          op.recovery_progress.data_recovered_to;
+        uint64_t aligned_size = ECUtil::align_next(op.obc->obs.oi.size);
+        if (op.recovery_progress.data_recovered_to < aligned_size) {
+          uint64_t read_to_end = aligned_size -
+            op.recovery_progress.data_recovered_to;
 
-        if (read_to_end < read_size) {
-          read_size = read_to_end;
+          if (read_to_end < read_size) {
+            read_size = read_to_end;
+          }
+        } else {
+          read_size = 0;
         }
       }
       sinfo.ro_range_to_shard_extent_set_with_parity(
