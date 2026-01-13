@@ -16,6 +16,7 @@
 #include "ECBackend.h"
 
 #include <iostream>
+#include <boost/asio/spawn.hpp>
 
 #include "ECInject.h"
 #include "messages/MOSDPGPush.h"
@@ -1001,31 +1002,60 @@ void ECBackend::submit_transaction(
   rmw_pipeline.start_rmw(std::move(op));
 }
 
+
+template <typename CompletionToken>
+auto async_read_bridge(ECBackend *ecbackend,
+                          const hobject_t &hoid,
+                          uint64_t object_size,
+                          const list<pair<ec_align_t, pair<bufferlist*, Context*>>> &to_read,
+                          CompletionToken&& token)
+{
+  return boost::asio::async_initiate<CompletionToken, void(int)>(
+      [ecbackend, hoid, object_size, to_read](auto handler) {
+
+          auto executor = boost::asio::get_associated_executor(handler);
+          auto handler_ptr = std::make_shared<std::decay_t<decltype(handler)>>(std::move(handler));
+          Context *on_finish = new LambdaContext([handler_ptr, executor](int r) mutable {
+              boost::asio::post(executor, [handler_ptr, r]() mutable {
+                  (*handler_ptr)(r);
+              });
+          });
+
+          ecbackend->objects_read_async(
+              hoid,
+              object_size,
+              to_read,
+              on_finish,
+              true
+          );
+      },
+      token);
+}
+
 int ECBackend::objects_read_sync(
   const hobject_t &hoid,
   uint64_t object_size,
   const std::list<std::pair<ec_align_t,
     std::pair<ceph::buffer::list*, Context*>>> &to_read)
 {
-  C_SaferCond on_finish;
+  boost::asio::io_context io_context;
+  dout(5) << "DEBUG: About to spawn coroutine." << dendl;
+  int result = 0;
+  
+  boost::asio::spawn(io_context, [&](boost::asio::yield_context yield) mutable {
+    dout(5) << "DEBUG: Coroutine STARTED." << dendl;
+    
+    const int r = async_read_bridge(this, hoid, object_size, to_read, yield);
+    
+    dout(5) << "DEBUG: Coroutine FINISHED. Result: " << r << dendl;
+    result = r;
+  });
 
-  objects_read_async(
-    hoid,
-    object_size,
-    to_read,
-    &on_finish,
-    true
-  );
+  dout(5) << "DEBUG: Calling run()." << dendl;
+  io_context.run();
+  dout(5) << "DEBUG: run() returned." << dendl;
 
-  // mock_read(
-  //   hoid,
-  //   object_size,
-  //   to_read,
-  //   &on_finish,
-  //   true
-  // );
-
-  return on_finish.wait();
+  return result;
 }
 
 int ECBackend::objects_read_local(
