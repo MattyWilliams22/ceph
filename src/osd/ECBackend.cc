@@ -1001,18 +1001,18 @@ void ECBackend::submit_transaction(
   rmw_pipeline.start_rmw(std::move(op));
 }
 
-int ECBackend::objects_read_sync(const hobject_t &hoid, uint64_t off, uint64_t len,
-                      uint32_t op_flags, ceph::buffer::list *bl) {
+int ECBackend::objects_read_sync(
+  const hobject_t &hoid,
+  uint64_t object_size,
+  const std::list<std::pair<ec_align_t,
+    std::pair<ceph::buffer::list*, Context*>>> &to_read)
+{
   C_SaferCond on_finish;
-  ec_align_t align{off, len, op_flags};
-  list<pair<ec_align_t, pair<bufferlist*, Context*>>> async_request;
-  async_request.push_back({ align, { bl, nullptr } });
-  uint64_t object_size = off + len;
 
   objects_read_async(
     hoid,
     object_size,
-    async_request,
+    to_read,
     &on_finish,
     true
   );
@@ -1020,7 +1020,7 @@ int ECBackend::objects_read_sync(const hobject_t &hoid, uint64_t off, uint64_t l
   // mock_read(
   //   hoid,
   //   object_size,
-  //   async_request,
+  //   to_read,
   //   &on_finish,
   //   true
   // );

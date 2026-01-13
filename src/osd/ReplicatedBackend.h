@@ -139,7 +139,8 @@ public:
     uint64_t off,
     uint64_t len,
     uint32_t op_flags,
-    ceph::buffer::list *bl) override;
+    ceph::buffer::list *bl,
+    uint64_t object_size) override;
 
   int objects_read_local(
    const hobject_t &hoid,

@@ -259,10 +259,13 @@ public:
   }
 
   int objects_read_sync(const hobject_t &hoid, uint64_t off, uint64_t len,
-                        uint32_t op_flags, ceph::buffer::list *bl) override
+                        uint32_t op_flags, ceph::buffer::list *bl, uint64_t object_size) override
   {
     if (is_optimized()) {
-      return optimized.objects_read_sync(hoid, off, len, op_flags, bl);
+      ec_align_t align{off, len, op_flags};
+      std::list<std::pair<ec_align_t, std::pair<bufferlist*, Context*>>> to_read;
+      to_read.push_back({ align, { bl, nullptr } });
+      return optimized.objects_read_sync(hoid, object_size, to_read);
     }
     ceph_abort_msg("Sync reads legacy EC");
   }

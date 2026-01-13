@@ -5898,7 +5898,7 @@ int PrimaryLogPG::do_read(OpContext *ctx, OSDOp& osd_op) {
     if (ctx->op->ec_direct_read()) {
       pg_unlock();
       result = pgbackend->objects_read_sync(
-        soid, op.extent.offset, op.extent.length, op.flags, &osd_op.outdata);
+        soid, op.extent.offset, op.extent.length, op.flags, &osd_op.outdata, oi.size);
       pg_lock();
       dout(20) << " EC sync read for " << soid << " result=" << result << dendl;
     } else {
@@ -5916,7 +5916,7 @@ int PrimaryLogPG::do_read(OpContext *ctx, OSDOp& osd_op) {
     }
   } else {
     int r = pgbackend->objects_read_sync(
-      soid, op.extent.offset, op.extent.length, op.flags, &osd_op.outdata);
+      soid, op.extent.offset, op.extent.length, op.flags, &osd_op.outdata, oi.size);
     // whole object?  can we verify the checksum?
     if (r >= 0 && op.extent.offset == 0 &&
         (uint64_t)r == oi.size && oi.is_data_digest()) {
@@ -9402,7 +9402,7 @@ int PrimaryLogPG::do_copy_get(OpContext *ctx, bufferlist::const_iterator& bp,
 	dout(10) << __func__ << ": async_read noted for " << soid << dendl;
       } else {
 	result = pgbackend->objects_read_sync(
-	  oi.soid, cursor.data_offset, max_read, osd_op.op.flags, &bl);
+	  oi.soid, cursor.data_offset, max_read, osd_op.op.flags, &bl, oi.size);
 	if (result < 0)
 	  return result;
       }
@@ -10712,7 +10712,7 @@ int PrimaryLogPG::do_cdc(const object_info_t& oi,
    * As s result, we leave this as a future work.
    */
   int r = pgbackend->objects_read_sync(
-      oi.soid, 0, oi.size, 0, &bl);
+      oi.soid, 0, oi.size, 0, &bl, oi.size);
   if (r < 0) {
     dout(0) << __func__ << " read fail " << oi.soid
             << " len: " << oi.size << " r: " << r << dendl;

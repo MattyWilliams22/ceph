@@ -600,7 +600,8 @@ typedef std::shared_ptr<const OSDMap> OSDMapRef;
        uint64_t off,
        uint64_t len,
        uint32_t op_flags,
-       ceph::buffer::list *bl) = 0;
+       ceph::buffer::list *bl,
+       uint64_t object_size) = 0;
 
    virtual int objects_read_local(
       const hobject_t &hoid,
