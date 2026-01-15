@@ -126,6 +126,17 @@ std::string create_one_ec_pool_pp(const std::string &pool_name,
       oss << "rados_mon_command osd pool set failed with error " << ret;
       return oss.str();
     }
+    bufferlist inbl2;
+    std::ostringstream oss2;
+    oss2 << "{\"prefix\": \"osd pool set\", \"pool\": \"" << pool_name
+        << "\", \"var\": \"supports_omap\", \"val\": \"true\"}";
+    ret = cluster.mon_command(oss2.str(), std::move(inbl), nullptr, nullptr);
+    if (ret) {
+      destroy_one_ec_pool_pp(pool_name, cluster);
+      destroy_ec_profile_pp(cluster, pool_name, oss);
+      oss << "rados_mon_command osd pool set failed with error " << ret;
+      return oss.str();
+    }
   }
 
   cluster.wait_for_latest_osdmap();

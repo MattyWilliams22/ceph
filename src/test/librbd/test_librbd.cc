@@ -174,11 +174,11 @@ static int create_image_pp(librbd::RBD &rbd,
 			   librados::IoCtx &ioctx,
 			   const char *name,
 			   uint64_t size, int *order) {
-  bool old_format;
-  uint64_t features;
-  int r = get_features(&old_format, &features);
-  if (r < 0)
-    return r;
+  bool old_format = false;
+  uint64_t features = 0;
+  // int r = get_features(&old_format, &features);
+  // if (r < 0)
+  //   return r;
   if (old_format) {
     librados::Rados rados(ioctx);
     int r = rados.conf_set("rbd_default_format", "1");
@@ -587,18 +587,28 @@ public:
     }
   }
 
-  std::string create_pool(bool unique = false) {
+  std::string create_pool(bool unique = false, bool fast_ec = false) {
     librados::Rados rados;
     std::string pool_name;
     if (unique) {
       pool_name = get_temp_pool_name("test-librbd-");
-      EXPECT_EQ("", create_one_pool_pp(pool_name, rados));
+      if (fast_ec) {
+        EXPECT_EQ("", create_one_ec_pool_pp(pool_name, rados, true));
+        EXPECT_EQ("", set_allow_ec_overwrites_pp(pool_name, rados, true));
+      } else {
+        EXPECT_EQ("", create_one_pool_pp(pool_name, rados));
+      }
       _unique_pool_names.push_back(pool_name);
     } else if (m_pool_number < _pool_names.size()) {
       pool_name = _pool_names[m_pool_number];
     } else {
       pool_name = get_temp_pool_name("test-librbd-");
-      EXPECT_EQ("", create_one_pool_pp(pool_name, rados));
+      if (fast_ec) {
+        EXPECT_EQ("", create_one_ec_pool_pp(pool_name, rados, true));
+        EXPECT_EQ("", set_allow_ec_overwrites_pp(pool_name, rados, true));
+      } else {
+        EXPECT_EQ("", create_one_pool_pp(pool_name, rados));
+      }
       _pool_names.push_back(pool_name);
     }
     ++m_pool_number;
@@ -1386,7 +1396,7 @@ int test_ls_pp(librbd::RBD& rbd, librados::IoCtx& io_ctx, size_t num_expected, .
 TEST_F(TestLibRBD, TestCreateLsDeletePP)
 {
   librados::IoCtx ioctx;
-  ASSERT_EQ(0, _rados.ioctx_create(create_pool(true).c_str(), ioctx));
+  ASSERT_EQ(0, _rados.ioctx_create(create_pool(true, true).c_str(), ioctx));
 
   {
     librbd::RBD rbd;
@@ -1398,6 +1408,10 @@ TEST_F(TestLibRBD, TestCreateLsDeletePP)
 
     ASSERT_EQ(0, create_image_pp(rbd, ioctx, name.c_str(), size, &order));
     ASSERT_EQ(1, test_ls_pp(rbd, ioctx, 1, name.c_str()));
+
+    ASSERT_EQ(0, rbd.open(ioctx, image, name.c_str(), NULL));
+    ASSERT_EQ(0, image.close());
+
     ASSERT_EQ(0, create_image_pp(rbd, ioctx, name2.c_str(), size, &order));
     ASSERT_EQ(2, test_ls_pp(rbd, ioctx, 2, name.c_str(), name2.c_str()));
     ASSERT_EQ(0, rbd.remove(ioctx, name.c_str()));
