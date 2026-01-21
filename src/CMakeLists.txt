@@ -575,6 +575,7 @@ set(ceph_common_deps
   ${LIB_RESOLV}
   Boost::thread
   Boost::system
+  Boost::context
   Boost::random
   Boost::program_options
   Boost::date_time
