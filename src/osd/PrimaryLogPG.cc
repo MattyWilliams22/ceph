@@ -2281,7 +2281,7 @@ void PrimaryLogPG::do_op_impl(OpRequestRef op)
       block_write_on_full_cache(head, op);
       return;
     }
-    }
+  }
 
   // dup/resent?
   if (op->may_write() || op->may_cache()) {
