@@ -1074,8 +1074,11 @@ void ECCommon::RMWPipeline::on_change2() {
   extent_cache.on_change2();
 }
 
-void ECCommon::RMWPipeline::call_write_ordered(std::function<void(void)> &&cb) {
-  next_write_all_shards = true;
+void ECCommon::RMWPipeline::call_write_ordered(std::function<void(void)> &&cb,
+    const bool write_all_shards) {
+  if (write_all_shards) {
+    next_write_all_shards = true;
+  }
   extent_cache.add_on_write(std::move(cb));
 }
 

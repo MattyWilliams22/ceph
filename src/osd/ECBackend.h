@@ -112,8 +112,9 @@ class ECBackend : public ECCommon {
 
   void dump_recovery_info(ceph::Formatter *f) const;
 
-  void call_write_ordered(std::function<void(void)> &&cb) {
-    rmw_pipeline.call_write_ordered(std::move(cb));
+  void call_write_ordered(std::function<void(void)> &&cb,
+    bool write_all_shards = true) {
+    rmw_pipeline.call_write_ordered(std::move(cb), write_all_shards);
   }
 
   void submit_transaction(

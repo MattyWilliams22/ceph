@@ -1125,19 +1125,26 @@ int ECBackend::objects_read_sync(
   bool done = false;
   bool waiting = false;
 
-  // Callback for the async read
-  Context *on_finish = new LambdaContext([&, coro](int r) {
-    result = r;
-    done = true;
+  // Ensures all pending writes complete before reading
+  // This prevents race conditions where reads bypass in-flight writes
+  call_write_ordered([&, coro, hoid, object_size, to_read]() mutable {
+    Context *on_finish = new LambdaContext([&, coro](int r) {
+      result = r;
+      done = true;
 
-    if (waiting) {
+      if (waiting) {
+        coro.resume();
+      }
+    });
+
+    objects_read_async(hoid, object_size, to_read, on_finish, true);
+
+    if (done && waiting) {
       coro.resume();
     }
-  });
+  }, false);
 
-  objects_read_async(hoid, object_size, to_read, on_finish, true);
-
-  // If the async read is not yet complete, yield and wait for it to complete
+  // Wait for both write ordering and read completion
   if (!done) {
     waiting = true;
     coro.yield();

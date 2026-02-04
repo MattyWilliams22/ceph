@@ -650,7 +650,8 @@ struct ECCommon {
 
     void on_change();
     void on_change2();
-    void call_write_ordered(std::function<void(void)> &&cb);
+    void call_write_ordered(std::function<void(void)> &&cb,
+      bool write_all_shards = true);
 
     CephContext *cct;
     ECListener *get_parent() const { return parent; }
