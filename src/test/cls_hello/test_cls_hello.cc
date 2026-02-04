@@ -16,6 +16,7 @@
 #include <iostream>
 #include <errno.h>
 #include <string>
+#include <thread>
 
 #include "include/rados/librados.hpp"
 #include "include/encoding.h"
@@ -240,6 +241,70 @@ TEST_P(ClsHello, Filter) {
     ++k;
   }
   ASSERT_TRUE(foundit);
+}
+
+TEST_P(ClsHello, MultiCommitOmap)
+{
+  const std::string object_name = "test_omap_object";
+  const auto number_of_ops = 11U;
+  const auto max_thread_count = 50U;  // High contention to expose race conditions
+  
+  // I. Setup: Create object and ensure OMAP is clean
+  librados::ObjectWriteOperation setup_op;
+  setup_op.create(true);
+  setup_op.omap_clear();
+  ASSERT_EQ(0, ioctx.operate(object_name, &setup_op));
+
+  // II. Thread Workload Function
+  std::vector<std::thread> workers(max_thread_count);
+  for (auto tid = 0U; tid < max_thread_count; ++tid) {
+    workers[tid] = std::thread([this, &object_name, tid] {
+      for (auto i = 0U; i < number_of_ops; ++i) {
+        // Generate unique key: resv_<tid>_<op>
+        const std::string key = "resv_" + std::to_string(tid) + "_" + std::to_string(i);
+        const std::string value = "value_" + std::to_string(tid) + "_" + std::to_string(i);
+        
+        // Encode value
+        bufferlist val_bl;
+        encode(value, val_bl);
+        
+        // Phase 1: Reserve (Write) - Set OMAP key
+        std::map<std::string, bufferlist> to_set;
+        to_set[key] = val_bl;
+        
+        librados::ObjectWriteOperation write_op;
+        write_op.omap_set(to_set);
+        int r = ioctx.operate(object_name, &write_op);
+        ASSERT_EQ(0, r);
+        
+        // Phase 2: Commit (Read-Modify-Write) - Check and remove
+        bufferlist in, out;
+        encode(key, in);
+        r = ioctx.exec(object_name, "hello", "omap_check_and_remove", in, out);
+        ASSERT_EQ(0, r);
+      }
+    });
+  }
+
+  // III. Execution: Wait for all threads
+  std::for_each(workers.begin(), workers.end(), [](auto& w) { w.join(); });
+
+  // IV. Assertion: Check for leaks
+  std::map<std::string, bufferlist> remaining_keys;
+  bool more = false;
+  int r = ioctx.omap_get_vals2(object_name, "", LONG_MAX, &remaining_keys, &more);
+  ASSERT_EQ(0, r);
+  
+  // The critical assertion: if ordering is correct, all keys should be removed
+  if (remaining_keys.size() > 0) {
+    std::cerr << "OMAP LEAK DETECTED! Remaining keys: " << remaining_keys.size() << std::endl;
+    for (const auto& kv : remaining_keys) {
+      std::cerr << "  Leaked key: " << kv.first << std::endl;
+    }
+  }
+  ASSERT_EQ(0U, remaining_keys.size())
+    << "OMAP read-after-write ordering bug detected! "
+    << remaining_keys.size() << " keys leaked.";
 }
 
 INSTANTIATE_TEST_SUITE_P(

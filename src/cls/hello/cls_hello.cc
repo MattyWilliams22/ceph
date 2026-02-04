@@ -273,6 +273,58 @@ static int bad_writer(cls_method_context_t hctx, bufferlist *in, bufferlist *out
 {
   return cls_cxx_write_full(hctx, in);
 }
+/**
+ * omap_check_and_remove - a read-modify-write method for OMAP testing
+ *
+ * This method checks if a key exists in the OMAP and removes it if found.
+ * It's designed to test read-after-write ordering in concurrent scenarios.
+ * If the key is not found, it indicates a potential ordering bug where
+ * the read executed before the write became visible.
+ */
+static int omap_check_and_remove(cls_method_context_t hctx, bufferlist *in, bufferlist *out)
+{
+  CLS_LOG(20, "in omap_check_and_remove");
+  // Decode the key from input
+  string key;
+  auto iter = in->cbegin();
+  try {
+    decode(key, iter);
+  } catch (ceph::buffer::error& e) {
+    CLS_LOG(20, "omap_check_and_remove: failed to decode key");
+    return -EINVAL;
+  }
+
+  CLS_LOG(20, "omap_check_and_remove: checking key '%s'", key.c_str());
+
+  // Phase 2: Commit (Read-Modify-Write)
+  // Try to read the key that should have been set in Phase 1
+  bufferlist val;
+  int r = cls_cxx_map_get_val(hctx, key, &val);
+  
+  if (r == -ENOENT) {
+    // Key not found - this indicates the read overtook the write!
+    // This is the "leak" we're testing for
+    CLS_LOG(20, "omap_check_and_remove: key '%s' not found (read overtook write!)", key.c_str());
+    return 0;  // Don't fail, just don't remove anything
+  }
+  
+  if (r < 0) {
+    CLS_LOG(20, "omap_check_and_remove: error reading key '%s': %d", key.c_str(), r);
+    return r;
+  }
+
+  CLS_LOG(20, "omap_check_and_remove: key '%s' found, removing", key.c_str());
+
+  // Key exists, remove it (completing the transaction)
+  r = cls_cxx_map_remove_key(hctx, key);
+  if (r < 0) {
+    CLS_LOG(20, "omap_check_and_remove: error removing key '%s': %d", key.c_str(), r);
+    return r;
+  }
+
+  return 0;
+}
+
 
 
 class PGLSHelloFilter : public PGLSFilter {
@@ -325,6 +377,7 @@ CLS_INIT(hello)
   cls_method_handle_t h_turn_it_to_11;
   cls_method_handle_t h_bad_reader;
   cls_method_handle_t h_bad_writer;
+  cls_method_handle_t h_omap_check_and_remove;
 
   cls_register("hello", &h_class);
 
@@ -366,7 +419,12 @@ CLS_INIT(hello)
   cls_register_cxx_method(h_class, "bad_reader", CLS_METHOD_WR,
 			  bad_reader, &h_bad_reader);
   cls_register_cxx_method(h_class, "bad_writer", CLS_METHOD_RD,
-			  bad_writer, &h_bad_writer);
+  	  bad_writer, &h_bad_writer);
+
+  // OMAP test method for read-after-write ordering
+  cls_register_cxx_method(h_class, "omap_check_and_remove",
+  	  CLS_METHOD_RD | CLS_METHOD_WR,
+  	  omap_check_and_remove, &h_omap_check_and_remove);
 
   // A PGLS filter
   cls_register_cxx_filter(h_class, "hello", hello_filter);
