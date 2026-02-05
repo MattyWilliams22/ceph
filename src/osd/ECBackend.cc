@@ -1122,31 +1122,44 @@ int ECBackend::objects_read_sync(
   CoroHandles coro)
 {
   int result = 0;
-  bool done = false;
-  bool waiting = false;
+  bool write_ordered_done = false;
+  bool write_ordered_waiting = false;
+  bool read_done = false;
+  bool read_waiting = false;
 
-  // Ensures all pending writes complete before reading
+  // Stage 1: Ensures all pending writes complete before reading
   // This prevents race conditions where reads bypass in-flight writes
-  call_write_ordered([&, coro, hoid, object_size, to_read]() mutable {
-    Context *on_finish = new LambdaContext([&, coro](int r) {
-      result = r;
-      done = true;
-
-      if (waiting) {
-        coro.resume();
-      }
-    });
-
-    objects_read_async(hoid, object_size, to_read, on_finish, true);
-
-    if (done && waiting) {
+  call_write_ordered([&, coro]() mutable {
+    write_ordered_done = true;
+    
+    // Resume coroutine if it's waiting for write ordering
+    if (write_ordered_waiting) {
       coro.resume();
     }
   }, false);
 
-  // Wait for both write ordering and read completion
-  if (!done) {
-    waiting = true;
+  // Yield only if write ordering callback hasn't happened yet
+  if (!write_ordered_done) {
+    write_ordered_waiting = true;
+    coro.yield();
+  }
+
+  // Stage 2: Now that writes are ordered, perform the async read
+  Context *on_finish = new LambdaContext([&, coro](int r) {
+    result = r;
+    read_done = true;
+
+    // Resume coroutine if it's waiting for read completion
+    if (read_waiting) {
+      coro.resume();
+    }
+  });
+
+  objects_read_async(hoid, object_size, to_read, on_finish, true);
+
+  // Yield only if read hasn't completed yet
+  if (!read_done) {
+    read_waiting = true;
     coro.yield();
   }
 
