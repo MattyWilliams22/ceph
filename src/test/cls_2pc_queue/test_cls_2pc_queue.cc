@@ -1107,7 +1107,7 @@ TEST_P(TestCls2PCQueue, AbortSpillover)
   ASSERT_EQ(reservations.size(), 0);
 }
 
-INSTANTIATE_TEST_SUITE_P(PoolTypes, TestCls2PCQueue,
+INSTANTIATE_TEST_SUITE_P(, TestCls2PCQueue,
   ::testing::Values(PoolType::REPLICATED, PoolType::FAST_EC),
   [](const ::testing::TestParamInfo<PoolType>& info) {
   return pool_type_name(info.param);

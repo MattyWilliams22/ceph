@@ -96,7 +96,7 @@ public:
   uint64_t image_number = 0;
 
   void SetUp() override {
-    ClsTestFixture::SetUp();
+    ceph::test::ClsTestFixture::SetUp();
     image_number = 0;
   }
 
@@ -3261,7 +3261,7 @@ TEST_P(TestClsRbd, sparsify)
 }
 
 
-INSTANTIATE_TEST_SUITE_P(PoolTypes, TestClsRbd,
+INSTANTIATE_TEST_SUITE_P(, TestClsRbd,
   ::testing::Values(PoolType::REPLICATED, PoolType::FAST_EC),
   [](const ::testing::TestParamInfo<PoolType>& info) {
   return pool_type_name(info.param);

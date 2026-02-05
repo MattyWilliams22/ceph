@@ -29,11 +29,11 @@ static librados::ObjectReadOperation *new_rop() {
   return new librados::ObjectReadOperation();
 }
 
-class cls_rgw : public ceph::test::ClsTestFixture {
+class TestClsVersion : public ceph::test::ClsTestFixture {
   // Inherits: rados, ioctx, pool_name, pool_type, SetUp(), TearDown()
 };
 
-TEST_P(cls_rgw, test_version_inc_read)
+TEST_P(TestClsVersion, test_version_inc_read)
 {
 
   /* add chains */
@@ -87,7 +87,7 @@ TEST_P(cls_rgw, test_version_inc_read)
 }
 
 
-TEST_P(cls_rgw, test_version_set)
+TEST_P(TestClsVersion, test_version_set)
 {
 
 
@@ -124,7 +124,7 @@ TEST_P(cls_rgw, test_version_set)
   delete op;
 }
 
-TEST_P(cls_rgw, test_version_inc_cond)
+TEST_P(TestClsVersion, test_version_inc_cond)
 {
 
 
@@ -223,7 +223,7 @@ TEST_P(cls_rgw, test_version_inc_cond)
   delete op;
 }
 
-TEST_P(cls_rgw, test_version_inc_check)
+TEST_P(TestClsVersion, test_version_inc_check)
 {
 
 
@@ -306,7 +306,7 @@ TEST_P(cls_rgw, test_version_inc_check)
 }
 
 
-INSTANTIATE_TEST_SUITE_P(PoolTypes, cls_rgw,
+INSTANTIATE_TEST_SUITE_P(, TestClsVersion,
   ::testing::Values(PoolType::REPLICATED, PoolType::FAST_EC),
   [](const ::testing::TestParamInfo<PoolType>& info) {
   return pool_type_name(info.param);

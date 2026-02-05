@@ -69,14 +69,14 @@ void lock_info(IoCtx *ioctx, string& oid, string& name, map<locker_id_t, locker_
   lock_info(ioctx, oid, name, lockers, NULL, NULL);
 }
 
-class ClsLock : public ceph::test::ClsTestFixture {
+class TestClsLock : public ceph::test::ClsTestFixture {
   // Inherits: rados, ioctx, pool_name, pool_type, SetUp(), TearDown()
 protected:
   // Use 'rados' instead of 'cluster' for consistency with base class
   Rados& cluster = rados;
 };
 
-TEST_P(ClsLock, TestMultiLocking) {
+TEST_P(TestClsLock, TestMultiLocking) {
   ClsLockType lock_type_shared = ClsLockType::SHARED;
   ClsLockType lock_type_exclusive = ClsLockType::EXCLUSIVE;
 
@@ -164,7 +164,7 @@ TEST_P(ClsLock, TestMultiLocking) {
   ASSERT_EQ(0, l.lock_shared(&ioctx, oid));
 }
 
-TEST_P(ClsLock, TestMeta) {
+TEST_P(TestClsLock, TestMeta) {
   Rados cluster2;
   IoCtx ioctx2;
   ASSERT_EQ("", connect_cluster_pp(cluster2));
@@ -216,7 +216,7 @@ TEST_P(ClsLock, TestMeta) {
   ASSERT_EQ(0, l.lock_exclusive(&ioctx, oid));
 }
 
-TEST_P(ClsLock, TestCookie) {
+TEST_P(TestClsLock, TestCookie) {
   string oid = "foo";
   string lock_name = "mylock";
   Lock l(lock_name);
@@ -244,7 +244,7 @@ TEST_P(ClsLock, TestCookie) {
   ASSERT_EQ(2, (int)lockers.size());
 }
 
-TEST_P(ClsLock, TestMultipleLocks) {
+TEST_P(TestClsLock, TestMultipleLocks) {
   string oid = "foo";
   Lock l("lock1");
   ASSERT_EQ(0, l.lock_exclusive(&ioctx, oid));
@@ -258,7 +258,7 @@ TEST_P(ClsLock, TestMultipleLocks) {
   ASSERT_EQ(2, (int)locks.size());
 }
 
-TEST_P(ClsLock, TestLockDuration) {
+TEST_P(TestClsLock, TestLockDuration) {
   string oid = "foo";
   Lock l("lock");
   utime_t dur(5, 0);
@@ -278,7 +278,7 @@ TEST_P(ClsLock, TestLockDuration) {
   ASSERT_EQ(0, l.lock_exclusive(&ioctx, oid));
 }
 
-TEST_P(ClsLock, TestAssertLocked) {
+TEST_P(TestClsLock, TestAssertLocked) {
   string oid = "foo";
   Lock l("lock1");
   ASSERT_EQ(0, l.lock_exclusive(&ioctx, oid));
@@ -310,7 +310,7 @@ TEST_P(ClsLock, TestAssertLocked) {
   ASSERT_EQ(-EBUSY, ioctx.operate(oid, &op5));
 }
 
-TEST_P(ClsLock, TestSetCookie) {
+TEST_P(TestClsLock, TestSetCookie) {
   string oid = "foo";
   string name = "name";
   string tag = "tag";
@@ -353,7 +353,7 @@ TEST_P(ClsLock, TestSetCookie) {
   ASSERT_EQ(0, ioctx.operate(oid, &op9));
 }
 
-TEST_P(ClsLock, TestRenew) {
+TEST_P(TestClsLock, TestRenew) {
   bufferlist bl;
 
   string oid1 = "foo1";
@@ -411,7 +411,7 @@ TEST_P(ClsLock, TestRenew) {
     "unable to create a lock with must_renew";
 }
 
-TEST_P(ClsLock, TestExclusiveEphemeralBasic) {
+TEST_P(TestClsLock, TestExclusiveEphemeralBasic) {
   bufferlist bl;
 
   string oid1 = "foo1";
@@ -445,7 +445,7 @@ TEST_P(ClsLock, TestExclusiveEphemeralBasic) {
 }
 
 
-TEST_P(ClsLock, TestExclusiveEphemeralStealEphemeral) {
+TEST_P(TestClsLock, TestExclusiveEphemeralStealEphemeral) {
   bufferlist bl;
 
   string oid1 = "foo1";
@@ -469,7 +469,7 @@ TEST_P(ClsLock, TestExclusiveEphemeralStealEphemeral) {
 }
 
 
-TEST_P(ClsLock, TestExclusiveEphemeralStealExclusive) {
+TEST_P(TestClsLock, TestExclusiveEphemeralStealExclusive) {
   bufferlist bl;
 
   string oid1 = "foo1";
@@ -493,8 +493,8 @@ TEST_P(ClsLock, TestExclusiveEphemeralStealExclusive) {
 }
 
 INSTANTIATE_TEST_SUITE_P(
-    PoolTypes,
-    ClsLock,
+    ,
+    TestClsLock,
     ::testing::Values(PoolType::REPLICATED, PoolType::FAST_EC),
     [](const ::testing::TestParamInfo<PoolType>& info) {
       return pool_type_name(info.param);

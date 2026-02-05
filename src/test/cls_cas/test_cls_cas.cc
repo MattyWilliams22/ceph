@@ -25,7 +25,7 @@ using ceph::test::create_pool_by_type;
 using ceph::test::destroy_pool_by_type;
 
 /// creates a temporary pool and initializes an IoCtx for each test
-class cls_cas : public ceph::test::ClsTestFixture {
+class TestClsCas : public ceph::test::ClsTestFixture {
   // Inherits: rados, ioctx, pool_name, pool_type, SetUp(), TearDown()
 };
 
@@ -39,7 +39,7 @@ static librados::ObjectReadOperation *new_rop() {
 }
 */
 
-TEST_P(cls_cas, get_put)
+TEST_P(TestClsCas, get_put)
 {
   bufferlist bl;
   bl.append("my data");
@@ -115,7 +115,7 @@ TEST_P(cls_cas, get_put)
   ASSERT_EQ(-ENOENT, ioctx.read(oid, t, 0, 0));
 }
 
-TEST_P(cls_cas, wrong_put)
+TEST_P(TestClsCas, wrong_put)
 {
   bufferlist bl;
   bl.append("my data");
@@ -151,7 +151,7 @@ TEST_P(cls_cas, wrong_put)
   ASSERT_EQ(-ENOENT, ioctx.read(oid, t, 0, 0));
 }
 
-TEST_P(cls_cas, dup_get)
+TEST_P(TestClsCas, dup_get)
 {
   bufferlist bl;
   bl.append("my data");
@@ -205,7 +205,7 @@ TEST_P(cls_cas, dup_get)
   }
 }
 
-TEST_P(cls_cas, dup_put)
+TEST_P(TestClsCas, dup_put)
 {
   bufferlist bl;
   bl.append("my data");
@@ -240,7 +240,7 @@ TEST_P(cls_cas, dup_put)
 }
 
 
-TEST_P(cls_cas, get_wrong_data)
+TEST_P(TestClsCas, get_wrong_data)
 {
   bufferlist bl, bl2;
   bl.append("my data");
@@ -292,9 +292,7 @@ TEST_P(cls_cas, get_wrong_data)
   ASSERT_EQ(-ENOENT, ioctx.read(oid, t, 0, 0));
 }
 
-INSTANTIATE_TEST_SUITE_P(
-    PoolTypes,
-    cls_cas,
+INSTANTIATE_TEST_SUITE_P(, TestClsCas,
     ::testing::Values(PoolType::REPLICATED, PoolType::FAST_EC),
     [](const ::testing::TestParamInfo<PoolType>& info) {
       return pool_type_name(info.param);

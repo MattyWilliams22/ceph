@@ -56,11 +56,11 @@ static std::string _get_required_osd_release(Rados& rados)
   return "";
 }
 
-class ClsHello : public ceph::test::ClsTestFixture {
+class TestClsHello : public ceph::test::ClsTestFixture {
   // Inherits: rados, ioctx, pool_name, pool_type, SetUp(), TearDown()
 };
 
-TEST_P(ClsHello, SayHello) {
+TEST_P(TestClsHello, SayHello) {
   bufferlist in, out;
   ASSERT_EQ(-ENOENT, ioctx.exec("myobject", "hello", "say_hello", in, out));
   ASSERT_EQ(0, ioctx.write_full("myobject", in));
@@ -80,7 +80,7 @@ TEST_P(ClsHello, SayHello) {
   ASSERT_EQ(-EINVAL, ioctx.exec("myobject", "hello", "say_hello", in, out));
 }
 
-TEST_P(ClsHello, RecordHello) {
+TEST_P(TestClsHello, RecordHello) {
   bufferlist in, out;
   ASSERT_EQ(0, ioctx.exec("myobject", "hello", "record_hello", in, out));
   ASSERT_EQ(-EEXIST, ioctx.exec("myobject", "hello", "record_hello", in, out));
@@ -99,7 +99,7 @@ TEST_P(ClsHello, RecordHello) {
   ASSERT_EQ(std::string("Hello, Tester!"), std::string(out.c_str(), out.length()));
 }
 
-TEST_P(ClsHello, WriteReturnData) {
+TEST_P(TestClsHello, WriteReturnData) {
   // skip test if not yet mimic
   if (_get_required_osd_release(rados) < "octopus") {
     std::cout << "cluster is not yet octopus, skipping test" << std::endl;
@@ -182,7 +182,7 @@ TEST_P(ClsHello, WriteReturnData) {
   }
 }
 
-TEST_P(ClsHello, Loud) {
+TEST_P(TestClsHello, Loud) {
   bufferlist in, out;
   ASSERT_EQ(0, ioctx.exec("myobject", "hello", "record_hello", in, out));
   ASSERT_EQ(0, ioctx.exec("myobject", "hello", "replay", in, out));
@@ -193,7 +193,7 @@ TEST_P(ClsHello, Loud) {
   ASSERT_EQ(std::string("HELLO, WORLD!"), std::string(out.c_str(), out.length()));
 }
 
-TEST_P(ClsHello, BadMethods) {
+TEST_P(TestClsHello, BadMethods) {
   bufferlist in, out;
 
   ASSERT_EQ(0, ioctx.write_full("myobject", in));
@@ -201,7 +201,7 @@ TEST_P(ClsHello, BadMethods) {
   ASSERT_EQ(-EIO, ioctx.exec("myobject", "hello", "bad_writer", in, out));
 }
 
-TEST_P(ClsHello, Filter) {
+TEST_P(TestClsHello, Filter) {
   char buf[128];
   memset(buf, 0xcc, sizeof(buf));
   bufferlist obj_content;
@@ -243,7 +243,7 @@ TEST_P(ClsHello, Filter) {
   ASSERT_TRUE(foundit);
 }
 
-TEST_P(ClsHello, MultiCommitOmap)
+TEST_P(TestClsHello, MultiCommitOmap)
 {
   const std::string object_name = "test_omap_object";
   const auto number_of_ops = 11U;
@@ -308,8 +308,8 @@ TEST_P(ClsHello, MultiCommitOmap)
 }
 
 INSTANTIATE_TEST_SUITE_P(
-    PoolTypes,
-    ClsHello,
+    ,
+    TestClsHello,
     ::testing::Values(PoolType::REPLICATED, PoolType::FAST_EC),
     [](const ::testing::TestParamInfo<PoolType>& info) {
       return pool_type_name(info.param);

@@ -22,11 +22,11 @@ static librados::ObjectWriteOperation *new_op() {
   return new librados::ObjectWriteOperation();
 }
 
-class cls_refcount : public ceph::test::ClsTestFixture {
+class TestClsRefcount : public ceph::test::ClsTestFixture {
   // Inherits: rados, ioctx, pool_name, pool_type, SetUp(), TearDown()
 };
 
-TEST_P(cls_refcount, test_implicit) /* test refcount using implicit referencing of newly created objects */
+TEST_P(TestClsRefcount, test_implicit) /* test refcount using implicit referencing of newly created objects */
 {
 
   /* add chains */
@@ -117,7 +117,7 @@ TEST_P(cls_refcount, test_implicit) /* test refcount using implicit referencing 
  * similar to test_implicit, just changes the order of the tags removal
  * see issue #20107
  */
-TEST_P(cls_refcount, test_implicit_idempotent) /* test refcount using implicit referencing of newly created objects */
+TEST_P(TestClsRefcount, test_implicit_idempotent) /* test refcount using implicit referencing of newly created objects */
 {
 
 
@@ -206,7 +206,7 @@ TEST_P(cls_refcount, test_implicit_idempotent) /* test refcount using implicit r
 }
 
 
-TEST_P(cls_refcount, test_put_snap) {
+TEST_P(TestClsRefcount, test_put_snap) {
 
 
   bufferlist bl;
@@ -230,7 +230,7 @@ TEST_P(cls_refcount, test_put_snap) {
 
 }
 
-TEST_P(cls_refcount, test_explicit) /* test refcount using implicit referencing of newly created objects */
+TEST_P(TestClsRefcount, test_explicit) /* test refcount using implicit referencing of newly created objects */
 {
 
 
@@ -297,7 +297,7 @@ TEST_P(cls_refcount, test_explicit) /* test refcount using implicit referencing 
 
 }
 
-TEST_P(cls_refcount, set) /* test refcount using implicit referencing of newly created objects */
+TEST_P(TestClsRefcount, set) /* test refcount using implicit referencing of newly created objects */
 {
 
 
@@ -686,7 +686,7 @@ TEST_F(cls_refcount_ec, set_ec) /* test refcount using implicit referencing of n
 }
 
 
-INSTANTIATE_TEST_SUITE_P(PoolTypes, cls_refcount,
+INSTANTIATE_TEST_SUITE_P(, TestClsRefcount,
   ::testing::Values(PoolType::REPLICATED, PoolType::FAST_EC),
   [](const ::testing::TestParamInfo<PoolType>& info) {
   return pool_type_name(info.param);

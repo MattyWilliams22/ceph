@@ -30,11 +30,11 @@ using ceph::test::pool_type_name;
 using ceph::test::create_pool_by_type;
 using ceph::test::destroy_pool_by_type;
 
-class ClsNumOps : public ceph::test::ClsTestFixture {
+class TestClsNumOps : public ceph::test::ClsTestFixture {
   // Inherits: rados, ioctx, pool_name, pool_type, SetUp(), TearDown()
 };
 
-TEST_P(ClsNumOps, Add) {
+TEST_P(TestClsNumOps, Add) {
   // exec numops add method with an empty bufferlist
 
   bufferlist in, out;
@@ -121,7 +121,7 @@ TEST_P(ClsNumOps, Add) {
   EXPECT_EQ(non_numeric_value, value_out);
 }
 
-TEST_P(ClsNumOps, Sub) {
+TEST_P(TestClsNumOps, Sub) {
   // subtract a number from a non-existing key
 
   std::string key = "my-key";
@@ -202,7 +202,7 @@ TEST_P(ClsNumOps, Sub) {
   EXPECT_EQ(non_numeric_value, value_out);
 }
 
-TEST_P(ClsNumOps, Mul) {
+TEST_P(TestClsNumOps, Mul) {
   // exec numops mul method with an empty bufferlist
 
   bufferlist in, out;
@@ -297,7 +297,7 @@ TEST_P(ClsNumOps, Mul) {
   EXPECT_EQ(non_numeric_value, value_out);
 }
 
-TEST_P(ClsNumOps, Div) {
+TEST_P(TestClsNumOps, Div) {
   // divide a non-existing key by a number
 
   std::string key = "my-key";
@@ -390,9 +390,7 @@ TEST_P(ClsNumOps, Div) {
   EXPECT_EQ(non_numeric_value, value_out);
 }
 
-INSTANTIATE_TEST_SUITE_P(
-    PoolTypes,
-    ClsNumOps,
+INSTANTIATE_TEST_SUITE_P(, TestClsNumOps,
     ::testing::Values(PoolType::REPLICATED, PoolType::FAST_EC),
     [](const ::testing::TestParamInfo<PoolType>& info) {
       return pool_type_name(info.param);

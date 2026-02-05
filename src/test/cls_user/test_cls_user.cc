@@ -26,7 +26,7 @@ using ceph::test::create_pool_by_type;
 using ceph::test::destroy_pool_by_type;
 
 // test fixture with helper functions
-class ClsAccount : public ceph::test::ClsTestFixture {
+class TestClsAccount : public ceph::test::ClsTestFixture {
   // Inherits: rados, ioctx, pool_name, pool_type, SetUp(), TearDown()
  protected:
   int add(const std::string& oid, const cls_user_account_resource& entry,
@@ -114,7 +114,7 @@ std::ostream& operator<<(std::ostream& out, const cls_user_account_resource& r)
   return out << r.path << r.name;
 }
 
-TEST_P(ClsAccount, add)
+TEST_P(TestClsAccount, add)
 {
   const std::string oid = __PRETTY_FUNCTION__;
   const auto u1 = cls_user_account_resource{.name = "user1"};
@@ -129,7 +129,7 @@ TEST_P(ClsAccount, add)
   EXPECT_EQ(-EEXIST, add(oid, u3, true, 2)); // case-insensitive match
 }
 
-TEST_P(ClsAccount, get)
+TEST_P(TestClsAccount, get)
 {
   const std::string oid = __PRETTY_FUNCTION__;
   const auto u1 = cls_user_account_resource{.name = "user1", .path = "A"};
@@ -143,7 +143,7 @@ TEST_P(ClsAccount, get)
   EXPECT_EQ(u2, get(oid, u1.name)); // accessible by the original name
 }
 
-TEST_P(ClsAccount, rm)
+TEST_P(TestClsAccount, rm)
 {
   const std::string oid = __PRETTY_FUNCTION__;
   const auto u1 = cls_user_account_resource{.name = "user1"};
@@ -156,7 +156,7 @@ TEST_P(ClsAccount, rm)
   ASSERT_EQ(0, rm(oid, u2.name)); // case-insensitive match
 }
 
-TEST_P(ClsAccount, list)
+TEST_P(TestClsAccount, list)
 {
   const std::string oid = __PRETTY_FUNCTION__;
   const auto u1 = cls_user_account_resource{.name = "user1", .path = ""};
@@ -188,7 +188,7 @@ TEST_P(ClsAccount, list)
 }
 
 
-INSTANTIATE_TEST_SUITE_P(PoolTypes, ClsAccount,
+INSTANTIATE_TEST_SUITE_P(, TestClsAccount,
   ::testing::Values(PoolType::REPLICATED, PoolType::FAST_EC),
   [](const ::testing::TestParamInfo<PoolType>& info) {
   return pool_type_name(info.param);

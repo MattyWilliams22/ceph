@@ -629,7 +629,7 @@ TEST_P(TestClsJournal, Append) {
   }
 }
 
-INSTANTIATE_TEST_SUITE_P(PoolTypes, TestClsJournal,
+INSTANTIATE_TEST_SUITE_P(, TestClsJournal,
   ::testing::Values(PoolType::REPLICATED, PoolType::FAST_EC),
   [](const ::testing::TestParamInfo<PoolType>& info) {
   return pool_type_name(info.param);

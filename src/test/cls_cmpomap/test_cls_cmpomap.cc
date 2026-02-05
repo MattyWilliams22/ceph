@@ -26,7 +26,7 @@ using ceph::test::destroy_pool_by_type;
 namespace cls::cmpomap {
 
 // test fixture with helper functions
-class CmpOmap : public ceph::test::ClsTestFixture {
+class TestClsCmpOmap : public ceph::test::ClsTestFixture {
   // Inherits: rados, ioctx, pool_name, pool_type, SetUp(), TearDown()
  protected:
   int do_cmp_vals(const std::string& oid, Mode mode,
@@ -85,7 +85,7 @@ class CmpOmap : public ceph::test::ClsTestFixture {
   }
 };
 
-TEST_P(CmpOmap, cmp_vals_noexist_str)
+TEST_P(TestClsCmpOmap, cmp_vals_noexist_str)
 {
   const std::string oid = __PRETTY_FUNCTION__;
   ASSERT_EQ(ioctx.create(oid, true), 0);
@@ -101,7 +101,7 @@ TEST_P(CmpOmap, cmp_vals_noexist_str)
   EXPECT_EQ(do_cmp_vals(oid, Mode::String, Op::LTE, {{key, input}}), -ECANCELED);
 }
 
-TEST_P(CmpOmap, cmp_vals_noexist_str_default)
+TEST_P(TestClsCmpOmap, cmp_vals_noexist_str_default)
 {
   const std::string oid = __PRETTY_FUNCTION__;
   ASSERT_EQ(ioctx.create(oid, true), 0);
@@ -118,7 +118,7 @@ TEST_P(CmpOmap, cmp_vals_noexist_str_default)
   EXPECT_EQ(do_cmp_vals(oid, Mode::String, Op::LTE, {{key, input}}, def), 0);
 }
 
-TEST_P(CmpOmap, cmp_vals_noexist_u64)
+TEST_P(TestClsCmpOmap, cmp_vals_noexist_u64)
 {
   const std::string oid = __PRETTY_FUNCTION__;
   ASSERT_EQ(ioctx.create(oid, true), 0);
@@ -134,7 +134,7 @@ TEST_P(CmpOmap, cmp_vals_noexist_u64)
   EXPECT_EQ(do_cmp_vals(oid, Mode::U64, Op::LTE, {{key, input}}), -ECANCELED);
 }
 
-TEST_P(CmpOmap, cmp_vals_noexist_u64_default)
+TEST_P(TestClsCmpOmap, cmp_vals_noexist_u64_default)
 {
   const std::string oid = __PRETTY_FUNCTION__;
   ASSERT_EQ(ioctx.create(oid, true), 0);
@@ -151,7 +151,7 @@ TEST_P(CmpOmap, cmp_vals_noexist_u64_default)
   EXPECT_EQ(do_cmp_vals(oid, Mode::U64, Op::LTE, {{key, input}}, def), 0);
 }
 
-TEST_P(CmpOmap, cmp_vals_str)
+TEST_P(TestClsCmpOmap, cmp_vals_str)
 {
   const std::string oid = __PRETTY_FUNCTION__;
   const std::string key = "key";
@@ -188,7 +188,7 @@ TEST_P(CmpOmap, cmp_vals_str)
   }
 }
 
-TEST_P(CmpOmap, cmp_vals_u64)
+TEST_P(TestClsCmpOmap, cmp_vals_u64)
 {
   const std::string oid = __PRETTY_FUNCTION__;
   const std::string key = "key";
@@ -226,7 +226,7 @@ TEST_P(CmpOmap, cmp_vals_u64)
   }
 }
 
-TEST_P(CmpOmap, cmp_vals_u64_invalid_input)
+TEST_P(TestClsCmpOmap, cmp_vals_u64_invalid_input)
 {
   const std::string oid = __PRETTY_FUNCTION__;
   ASSERT_EQ(ioctx.create(oid, true), 0);
@@ -241,7 +241,7 @@ TEST_P(CmpOmap, cmp_vals_u64_invalid_input)
   EXPECT_EQ(do_cmp_vals(oid, Mode::U64, Op::LTE, {{key, empty}}, def), -EINVAL);
 }
 
-TEST_P(CmpOmap, cmp_vals_u64_invalid_default)
+TEST_P(TestClsCmpOmap, cmp_vals_u64_invalid_default)
 {
   const std::string oid = __PRETTY_FUNCTION__;
   ASSERT_EQ(ioctx.create(oid, true), 0);
@@ -256,7 +256,7 @@ TEST_P(CmpOmap, cmp_vals_u64_invalid_default)
   EXPECT_EQ(do_cmp_vals(oid, Mode::U64, Op::LTE, {{key, input}}, def), -EIO);
 }
 
-TEST_P(CmpOmap, cmp_vals_u64_empty_default)
+TEST_P(TestClsCmpOmap, cmp_vals_u64_empty_default)
 {
   const std::string oid = __PRETTY_FUNCTION__;
   ASSERT_EQ(ioctx.create(oid, true), 0);
@@ -271,7 +271,7 @@ TEST_P(CmpOmap, cmp_vals_u64_empty_default)
   EXPECT_EQ(do_cmp_vals(oid, Mode::U64, Op::LTE, {{key, input}}, def), -ECANCELED);
 }
 
-TEST_P(CmpOmap, cmp_vals_u64_invalid_value)
+TEST_P(TestClsCmpOmap, cmp_vals_u64_invalid_value)
 {
   const std::string oid = __PRETTY_FUNCTION__;
   ASSERT_EQ(ioctx.create(oid, true), 0);
@@ -286,7 +286,7 @@ TEST_P(CmpOmap, cmp_vals_u64_invalid_value)
   EXPECT_EQ(do_cmp_vals(oid, Mode::U64, Op::LTE, {{key, input}}), -EIO);
 }
 
-TEST_P(CmpOmap, cmp_vals_at_max_keys)
+TEST_P(TestClsCmpOmap, cmp_vals_at_max_keys)
 {
   ComparisonMap comparisons;
   const bufferlist empty;
@@ -297,7 +297,7 @@ TEST_P(CmpOmap, cmp_vals_at_max_keys)
   EXPECT_EQ(cmp_vals(op, Mode::String, Op::EQ, std::move(comparisons), empty), 0);
 }
 
-TEST_P(CmpOmap, cmp_vals_over_max_keys)
+TEST_P(TestClsCmpOmap, cmp_vals_over_max_keys)
 {
   ComparisonMap comparisons;
   const bufferlist empty;
@@ -308,7 +308,7 @@ TEST_P(CmpOmap, cmp_vals_over_max_keys)
   EXPECT_EQ(cmp_vals(op, Mode::String, Op::EQ, std::move(comparisons), empty), -E2BIG);
 }
 
-TEST_P(CmpOmap, cmp_set_vals_noexist_str)
+TEST_P(TestClsCmpOmap, cmp_set_vals_noexist_str)
 {
   const std::string oid = __PRETTY_FUNCTION__;
   const bufferlist value = string_buffer("bbb");
@@ -324,7 +324,7 @@ TEST_P(CmpOmap, cmp_set_vals_noexist_str)
   EXPECT_EQ(get_vals(oid, &vals), -ENOENT); // never got created
 }
 
-TEST_P(CmpOmap, cmp_set_vals_noexist_str_default)
+TEST_P(TestClsCmpOmap, cmp_set_vals_noexist_str_default)
 {
   const std::string oid = __PRETTY_FUNCTION__;
   const bufferlist value = string_buffer("bbb");
@@ -347,7 +347,7 @@ TEST_P(CmpOmap, cmp_set_vals_noexist_str_default)
   EXPECT_EQ(vals.count("lte"), 0);
 }
 
-TEST_P(CmpOmap, cmp_set_vals_noexist_u64)
+TEST_P(TestClsCmpOmap, cmp_set_vals_noexist_u64)
 {
   const std::string oid = __PRETTY_FUNCTION__;
   const bufferlist value = u64_buffer(0);
@@ -363,7 +363,7 @@ TEST_P(CmpOmap, cmp_set_vals_noexist_u64)
   ASSERT_EQ(get_vals(oid, &vals), -ENOENT);
 }
 
-TEST_P(CmpOmap, cmp_set_vals_noexist_u64_default)
+TEST_P(TestClsCmpOmap, cmp_set_vals_noexist_u64_default)
 {
   const std::string oid = __PRETTY_FUNCTION__;
   const bufferlist value = u64_buffer(0);
@@ -386,7 +386,7 @@ TEST_P(CmpOmap, cmp_set_vals_noexist_u64_default)
   EXPECT_EQ(vals.count("lte"), 1);
 }
 
-TEST_P(CmpOmap, cmp_set_vals_str)
+TEST_P(TestClsCmpOmap, cmp_set_vals_str)
 {
   const std::string oid = __PRETTY_FUNCTION__;
   const bufferlist value1 = string_buffer("bbb");
@@ -423,7 +423,7 @@ TEST_P(CmpOmap, cmp_set_vals_str)
   }
 }
 
-TEST_P(CmpOmap, cmp_set_vals_u64)
+TEST_P(TestClsCmpOmap, cmp_set_vals_u64)
 {
   const std::string oid = __PRETTY_FUNCTION__;
   const bufferlist value1 = u64_buffer(0);
@@ -460,7 +460,7 @@ TEST_P(CmpOmap, cmp_set_vals_u64)
   }
 }
 
-TEST_P(CmpOmap, cmp_set_vals_u64_einval)
+TEST_P(TestClsCmpOmap, cmp_set_vals_u64_einval)
 {
   const std::string oid = __PRETTY_FUNCTION__;
   const std::string key = "key";
@@ -470,7 +470,7 @@ TEST_P(CmpOmap, cmp_set_vals_u64_einval)
   ASSERT_EQ(do_cmp_set_vals(oid, Mode::U64, Op::EQ, {{key, value2}}), -EINVAL);
 }
 
-TEST_P(CmpOmap, cmp_set_vals_u64_eio)
+TEST_P(TestClsCmpOmap, cmp_set_vals_u64_eio)
 {
   const std::string oid = __PRETTY_FUNCTION__;
   const std::string key = "key";
@@ -486,7 +486,7 @@ TEST_P(CmpOmap, cmp_set_vals_u64_eio)
   }
 }
 
-TEST_P(CmpOmap, cmp_set_vals_at_max_keys)
+TEST_P(TestClsCmpOmap, cmp_set_vals_at_max_keys)
 {
   ComparisonMap comparisons;
   const bufferlist value = u64_buffer(0);
@@ -497,7 +497,7 @@ TEST_P(CmpOmap, cmp_set_vals_at_max_keys)
   EXPECT_EQ(cmp_set_vals(op, Mode::U64, Op::EQ, std::move(comparisons), std::nullopt), 0);
 }
 
-TEST_P(CmpOmap, cmp_set_vals_over_max_keys)
+TEST_P(TestClsCmpOmap, cmp_set_vals_over_max_keys)
 {
   ComparisonMap comparisons;
   const bufferlist value = u64_buffer(0);
@@ -508,7 +508,7 @@ TEST_P(CmpOmap, cmp_set_vals_over_max_keys)
   EXPECT_EQ(cmp_set_vals(op, Mode::U64, Op::EQ, std::move(comparisons), std::nullopt), -E2BIG);
 }
 
-TEST_P(CmpOmap, cmp_rm_keys_noexist_str)
+TEST_P(TestClsCmpOmap, cmp_rm_keys_noexist_str)
 {
   const std::string oid = __PRETTY_FUNCTION__;
   const bufferlist empty;
@@ -523,7 +523,7 @@ TEST_P(CmpOmap, cmp_rm_keys_noexist_str)
   ASSERT_EQ(get_vals(oid, &vals), -ENOENT);
 }
 
-TEST_P(CmpOmap, cmp_rm_keys_noexist_u64)
+TEST_P(TestClsCmpOmap, cmp_rm_keys_noexist_u64)
 {
   const std::string oid = __PRETTY_FUNCTION__;
   const bufferlist value = u64_buffer(0);
@@ -538,7 +538,7 @@ TEST_P(CmpOmap, cmp_rm_keys_noexist_u64)
   ASSERT_EQ(get_vals(oid, &vals), -ENOENT);
 }
 
-TEST_P(CmpOmap, cmp_rm_keys_str)
+TEST_P(TestClsCmpOmap, cmp_rm_keys_str)
 {
   const std::string oid = __PRETTY_FUNCTION__;
   const bufferlist value1 = string_buffer("bbb");
@@ -574,7 +574,7 @@ TEST_P(CmpOmap, cmp_rm_keys_str)
   }
 }
 
-TEST_P(CmpOmap, cmp_rm_keys_u64)
+TEST_P(TestClsCmpOmap, cmp_rm_keys_u64)
 {
   const std::string oid = __PRETTY_FUNCTION__;
   const bufferlist value1 = u64_buffer(0);
@@ -610,7 +610,7 @@ TEST_P(CmpOmap, cmp_rm_keys_u64)
   }
 }
 
-TEST_P(CmpOmap, cmp_rm_keys_u64_einval)
+TEST_P(TestClsCmpOmap, cmp_rm_keys_u64_einval)
 {
   const std::string oid = __PRETTY_FUNCTION__;
   const std::string key = "key";
@@ -620,7 +620,7 @@ TEST_P(CmpOmap, cmp_rm_keys_u64_einval)
   ASSERT_EQ(do_cmp_rm_keys(oid, Mode::U64, Op::EQ, {{key, value2}}), -EINVAL);
 }
 
-TEST_P(CmpOmap, cmp_rm_keys_u64_eio)
+TEST_P(TestClsCmpOmap, cmp_rm_keys_u64_eio)
 {
   const std::string oid = __PRETTY_FUNCTION__;
   const std::string key = "key";
@@ -635,7 +635,7 @@ TEST_P(CmpOmap, cmp_rm_keys_u64_eio)
   }
 }
 
-TEST_P(CmpOmap, cmp_rm_keys_at_max_keys)
+TEST_P(TestClsCmpOmap, cmp_rm_keys_at_max_keys)
 {
   ComparisonMap comparisons;
   const bufferlist value = u64_buffer(0);
@@ -646,7 +646,7 @@ TEST_P(CmpOmap, cmp_rm_keys_at_max_keys)
   EXPECT_EQ(cmp_rm_keys(op, Mode::U64, Op::EQ, std::move(comparisons)), 0);
 }
 
-TEST_P(CmpOmap, cmp_rm_keys_over_max_keys)
+TEST_P(TestClsCmpOmap, cmp_rm_keys_over_max_keys)
 {
   ComparisonMap comparisons;
   const bufferlist value = u64_buffer(0);
@@ -658,7 +658,7 @@ TEST_P(CmpOmap, cmp_rm_keys_over_max_keys)
 }
 
 // test upgrades from empty omap values to u64
-TEST_P(CmpOmap, cmp_rm_keys_u64_empty)
+TEST_P(TestClsCmpOmap, cmp_rm_keys_u64_empty)
 {
   const std::string oid = __PRETTY_FUNCTION__;
   const bufferlist value1; // empty buffer
@@ -694,7 +694,7 @@ TEST_P(CmpOmap, cmp_rm_keys_u64_empty)
   }
 }
 
-INSTANTIATE_TEST_SUITE_P(PoolTypes, CmpOmap,
+INSTANTIATE_TEST_SUITE_P(, TestClsCmpOmap,
   ::testing::Values(PoolType::REPLICATED, PoolType::FAST_EC),
   [](const ::testing::TestParamInfo<PoolType>& info) {
   return pool_type_name(info.param);

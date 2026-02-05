@@ -638,7 +638,7 @@ TEST_P(TestClsQueue, WrapAround)
   }
 }
 
-INSTANTIATE_TEST_SUITE_P(PoolTypes, TestClsQueue,
+INSTANTIATE_TEST_SUITE_P(, TestClsQueue,
   ::testing::Values(PoolType::REPLICATED, PoolType::FAST_EC),
   [](const ::testing::TestParamInfo<PoolType>& info) {
   return pool_type_name(info.param);

@@ -27,7 +27,7 @@ using ceph::test::create_pool_by_type;
 using ceph::test::destroy_pool_by_type;
 
 /// creates a temporary pool and initializes an IoCtx for each test
-class cls_log : public ceph::test::ClsTestFixture {
+class TestClsLog : public ceph::test::ClsTestFixture {
   // Inherits: rados, ioctx, pool_name, pool_type, SetUp(), TearDown()
 };
 
@@ -132,7 +132,7 @@ static int log_list(librados::IoCtx& ioctx, const std::string& oid,
   return log_list(ioctx, oid, from, to, 0, entries, &truncated);
 }
 
-TEST_P(cls_log, test_log_add_same_time)
+TEST_P(TestClsLog, test_log_add_same_time)
 {
   /* add chains */
   string oid = "obj";
@@ -193,7 +193,7 @@ TEST_P(cls_log, test_log_add_same_time)
   }
 }
 
-TEST_P(cls_log, test_log_add_different_time)
+TEST_P(TestClsLog, test_log_add_different_time)
 {
   /* add chains */
   string oid = "obj";
@@ -278,7 +278,7 @@ int do_log_trim(librados::IoCtx& ioctx, const std::string& oid,
   return ioctx.operate(oid, &op);
 }
 
-TEST_P(cls_log, trim_by_time)
+TEST_P(TestClsLog, trim_by_time)
 {
   /* add chains */
   string oid = "obj";
@@ -313,7 +313,7 @@ TEST_P(cls_log, trim_by_time)
   }
 }
 
-TEST_P(cls_log, trim_by_marker)
+TEST_P(TestClsLog, trim_by_marker)
 {
   string oid = "obj";
   ASSERT_EQ(0, ioctx.create(oid, true));
@@ -374,9 +374,7 @@ TEST_P(cls_log, trim_by_marker)
   }
 }
 
-INSTANTIATE_TEST_SUITE_P(
-    PoolTypes,
-    cls_log,
+INSTANTIATE_TEST_SUITE_P(, TestClsLog,
     ::testing::Values(PoolType::REPLICATED, PoolType::FAST_EC),
     [](const ::testing::TestParamInfo<PoolType>& info) {
       return pool_type_name(info.param);
