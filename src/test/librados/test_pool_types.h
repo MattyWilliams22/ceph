@@ -72,8 +72,9 @@ inline int destroy_pool_by_type(
   }
 }
 
-// Base class for parameterized CLS tests (both REPLICATED and FAST_EC pools)
-class ClsTestFixture : public ::testing::TestWithParam<PoolType> {
+// Generic base class for parameterized pool type tests
+// Can be used for any test that needs to run on multiple pool types
+class PoolTypeTestFixture : public ::testing::TestWithParam<PoolType> {
  protected:
   static librados::Rados rados;
   librados::IoCtx ioctx;
@@ -93,8 +94,11 @@ class ClsTestFixture : public ::testing::TestWithParam<PoolType> {
   }
 };
 
-// Base class for EC-only CLS tests
-class ClsTestFixtureEC : public ::testing::Test {
+// Alias for backward compatibility with existing CLS tests
+using ClsTestFixture = PoolTypeTestFixture;
+
+// Base class for EC-only tests
+class ECOnlyTestFixture : public ::testing::Test {
  protected:
   static librados::Rados rados;
   librados::IoCtx ioctx;
@@ -111,6 +115,9 @@ class ClsTestFixtureEC : public ::testing::Test {
     ASSERT_EQ(0, destroy_pool_by_type(pool_name, rados, PoolType::FAST_EC));
   }
 };
+
+// Alias for backward compatibility
+using ClsTestFixtureEC = ECOnlyTestFixture;
 
 } // namespace test
 } // namespace ceph
