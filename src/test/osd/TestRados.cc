@@ -574,7 +574,6 @@ int main(int argc, char **argv)
 	exit(1);
       }
       ec_pool = true;
-      no_omap = true;
       no_sparse = true;
     } else if (strcmp(argv[i], "--op") == 0) {
       i++;
