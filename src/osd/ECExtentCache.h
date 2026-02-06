@@ -102,6 +102,8 @@ class ECExtentCache {
         adjust_count(items, bytes);
   }
 
+  [[nodiscard]] bool has_object_write(hobject_t const &oid) const;
+
   class LRU {
    public:
     struct Key {

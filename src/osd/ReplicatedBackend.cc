@@ -306,7 +306,7 @@ void ReplicatedBackend::objects_read_async(
   const list<pair<ec_align_t,
 		  pair<bufferlist*, Context*> > > &to_read,
   Context *on_complete,
-  bool fast_read)
+  bool fast_read, bool ordered_read)
 {
   ceph_abort_msg("async read is not used by replica pool");
 }

@@ -311,7 +311,8 @@ void PrimaryLogPG::OpContext::start_async_reads(PrimaryLogPG *pg)
     obc->obs.oi.soid,
     obc->obs.oi.size,
     in_native,
-    new OnReadComplete(pg, this), pg->get_pool().fast_read);
+    new OnReadComplete(pg, this), pg->get_pool().fast_read,
+    op->rwordered());
 }
 void PrimaryLogPG::OpContext::finish_read(PrimaryLogPG *pg)
 {

@@ -669,11 +669,12 @@ static ostream &_prefix(std::ostream *_dout,
   return _prefix(_dout, &read_completer->read_pipeline);
 }
 
-void ECCommon::ReadPipeline::objects_read_and_reconstruct(
+void ECCommon::ReadPipeline::_objects_read_and_reconstruct(
     const map<hobject_t, std::list<ec_align_t>> &reads,
     const bool fast_read,
     const uint64_t object_size,
-    GenContextURef<ec_extents_t&&> &&func) {
+    GenContextURef<ec_extents_t&&> &&func)
+{
   in_progress_client_reads.emplace_back(reads.size(), std::move(func));
   if (!reads.size()) {
     kick_reads();
@@ -686,7 +687,7 @@ void ECCommon::ReadPipeline::objects_read_and_reconstruct(
     if (cct->_conf->bluestore_debug_inject_read_err &&
         ECInject::test_parity_read(hoid)) {
       get_want_to_read_all_shards(to_read, want_shard_reads);
-    }
+        }
     else {
       get_want_to_read_shards(to_read, want_shard_reads);
     }
@@ -716,6 +717,35 @@ void ECCommon::ReadPipeline::objects_read_and_reconstruct(
     false,
     std::make_unique<ClientReadCompleter>(
       *this, &(in_progress_client_reads.back())));
+}
+
+void ECCommon::ReadPipeline::objects_read_and_reconstruct(
+    const map<hobject_t, std::list<ec_align_t>> &reads,
+    const bool fast_read,
+    const uint64_t object_size,
+    GenContextURef<ec_extents_t&&> &&func,
+    RMWPipeline &rmw_pipeline,
+    bool ordered_read) {
+  if (ordered_read) {
+    std::set<hobject_t> oids;
+    for (const auto &[oid, _] : reads) {
+      oids.insert(oid);
+    }
+
+    auto func_ptr = std::make_shared<GenContextURef<ec_extents_t&&>>(std::move(func));
+
+    bool has_writes = rmw_pipeline.wait_for_writes_to_objects(
+      oids,
+      [this, reads, fast_read, object_size, func_ptr]() mutable {
+        _objects_read_and_reconstruct(reads, fast_read, object_size, std::move(*func_ptr));
+      });
+
+    if (!has_writes) {
+      _objects_read_and_reconstruct(reads, fast_read, object_size, std::move(*func_ptr));
+    }
+  } else {
+    _objects_read_and_reconstruct(reads, fast_read, object_size, std::move(func));
+  }
 }
 
 void ECCommon::ReadPipeline::objects_read_and_reconstruct_for_rmw(
@@ -1063,6 +1093,17 @@ void ECCommon::RMWPipeline::on_change2() {
 void ECCommon::RMWPipeline::call_write_ordered(std::function<void(void)> &&cb) {
   next_write_all_shards = true;
   extent_cache.add_on_write(std::move(cb));
+}
+
+bool ECCommon::RMWPipeline::wait_for_writes_to_objects(
+  const std::set<hobject_t> &oids, std::function<void(void)> &&callback) {
+  for (hobject_t oid : oids) {
+    if (extent_cache.has_object_write(oid)) {
+      extent_cache.add_on_write(std::move(callback));
+      return true;
+    }
+  }
+  return false;
 }
 
 ECCommon::RecoveryBackend::RecoveryBackend(

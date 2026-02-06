@@ -95,7 +95,8 @@ struct ECCommon {
       const std::map<hobject_t, std::list<ec_align_t>> &reads,
       bool fast_read,
       uint64_t object_size,
-      GenContextURef<ec_extents_t&&> &&func) = 0;
+      GenContextURef<ec_extents_t&&> &&func,
+      bool ordered_read = false) = 0;
 
   struct shard_read_t {
     extent_set extents;
@@ -311,12 +312,22 @@ struct ECCommon {
     }
   };
 
+  struct RMWPipeline;
+
   struct ReadPipeline {
+    void _objects_read_and_reconstruct(
+        const std::map<hobject_t, std::list<ec_align_t>> &reads,
+        const bool fast_read,
+        const uint64_t object_size,
+        GenContextURef<ec_extents_t&&> &&func);
+
     void objects_read_and_reconstruct(
         const std::map<hobject_t, std::list<ec_align_t>> &reads,
         bool fast_read,
         uint64_t object_size,
-        GenContextURef<ec_extents_t&&> &&func);
+        GenContextURef<ec_extents_t&&> &&func,
+        RMWPipeline &rmw_pipeline,
+        bool ordered_read = false);
 
     void objects_read_and_reconstruct_for_rmw(
         std::map<hobject_t, read_request_t> &&to_read,
@@ -615,6 +626,10 @@ struct ECCommon {
     void on_change();
     void on_change2();
     void call_write_ordered(std::function<void(void)> &&cb);
+    bool wait_for_writes_to_objects(
+      const std::set<hobject_t> &oids,
+      std::function<void(void)> &&callback
+      );
 
     CephContext *cct;
     ECListener *get_parent() const { return parent; }

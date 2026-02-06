@@ -1099,7 +1099,8 @@ void ECBackend::objects_read_async(
     const list<pair<ec_align_t,
                     pair<bufferlist*, Context*>>> &to_read,
     Context *on_complete,
-    bool fast_read) {
+    bool fast_read,
+    bool ordered_read) {
   map<hobject_t, std::list<ec_align_t>> reads;
 
   uint32_t flags = 0;
@@ -1271,9 +1272,11 @@ void ECBackend::objects_read_and_reconstruct(
   const map<hobject_t, std::list<ec_align_t>> &reads,
   bool fast_read,
   uint64_t object_size,
-  GenContextURef<ECCommon::ec_extents_t&&> &&func) {
+  GenContextURef<ECCommon::ec_extents_t&&> &&func,
+  bool ordered_read) {
   return read_pipeline.objects_read_and_reconstruct(
-    reads, fast_read, object_size, std::move(func));
+    reads, fast_read, object_size, std::move(func),
+    rmw_pipeline, ordered_read);
 }
 
 void ECBackend::objects_read_and_reconstruct_for_rmw(

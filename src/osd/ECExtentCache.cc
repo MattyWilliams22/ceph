@@ -146,6 +146,30 @@ void ECExtentCache::Object::insert(shard_extent_map_t const &buffers) const {
   }
 }
 
+bool ECExtentCache::has_object_write(hobject_t const &oid) const {
+  // Check if object exists in the cache
+  auto it = objects.find(oid);
+  if (it == objects.end()) {
+    return false;  // No object means no writes
+  }
+
+  const Object &obj = it->second;
+
+  // Check if there are any active IOs for this object
+  if (obj.active_ios > 0) {
+    return true;
+  }
+
+  // Check if there are any operations in the waiting queue for this object
+  for (const auto &op : waiting_ops) {
+    if (op->get_hoid() == oid) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 void ECExtentCache::Object::write_done(shard_extent_map_t const &buffers,
                                        uint64_t new_size) {
   insert(buffers);
