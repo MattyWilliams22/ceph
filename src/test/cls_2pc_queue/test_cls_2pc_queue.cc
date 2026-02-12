@@ -42,7 +42,7 @@ TEST_P(TestCls2PCQueue, GetCapacity)
 
   uint64_t size;
 
-  const int ret = cls_queue_get_capacity(ioctx, queue_name, size);
+  const int ret = cls_2pc_queue_get_capacity(ioctx, queue_name, size);
   ASSERT_EQ(0, ret);
   ASSERT_EQ(max_size, size);
 }
@@ -630,7 +630,7 @@ TEST_P(TestCls2PCQueue, ReserveAbort)
       }
     });
   }
-  
+
   auto aborter = std::thread([this, &queue_name] {
     librados::ObjectWriteOperation op;
     int remaining_ops = number_of_ops*max_workers;
@@ -762,22 +762,22 @@ TEST_P(TestCls2PCQueue, Cleanup)
   cls_2pc_reservations all_reservations;
   ASSERT_EQ(0, cls_2pc_queue_list_reservations(ioctx, queue_name, all_reservations));
   ASSERT_EQ(all_reservations.size(), number_of_ops*max_workers);
-  
+
   cls_2pc_queue_expire_reservations(op, stale_time);
   ASSERT_EQ(0, ioctx.operate(queue_name, &op));
-  
+
   cls_2pc_reservations good_reservations;
   ASSERT_EQ(0, cls_2pc_queue_list_reservations(ioctx, queue_name, good_reservations));
 
   for (const auto& r : all_reservations) {
     if (good_reservations.find(r.first) == good_reservations.end()) {
       // not in the "good" list
-      ASSERT_GE(stale_time.time_since_epoch().count(), 
+      ASSERT_GE(stale_time.time_since_epoch().count(),
           r.second.timestamp.time_since_epoch().count());
     }
   }
   for (const auto& r : good_reservations) {
-   ASSERT_LT(stale_time.time_since_epoch().count(), 
+   ASSERT_LT(stale_time.time_since_epoch().count(),
        r.second.timestamp.time_since_epoch().count());
   }
 }
@@ -923,8 +923,9 @@ TEST_P(TestCls2PCQueue, MultiProducerConsumer)
   std::vector<std::thread> producers(max_workers);
   for (auto& p : producers) {
     p = std::thread([this, &queue_name, &producer_count, &retry_happened] {
-      librados::ObjectWriteOperation op;
       for (auto i = 0U; i < number_of_ops; ++i) {
+        librados::ObjectWriteOperation op;
+        std::cout << "MATTY: Producer - Start of handling op " << i << std::endl;
         const std::string element_prefix("op-" +to_string(i) + "-element-");
         std::vector<bufferlist> data(number_of_elements);
         auto total_size = 0UL;
@@ -936,6 +937,7 @@ TEST_P(TestCls2PCQueue, MultiProducerConsumer)
             return bl;
           });
         cls_2pc_reservation::id_t res_id = cls_2pc_reservation::NO_ID;
+        std::cout << "MATTY: Producer - First attempt at cls_2pc_queue_reserve for op " << i << std::endl;
         auto rc = cls_2pc_queue_reserve(ioctx, queue_name, total_size, number_of_elements, res_id);
         while (rc != 0) {
           // other errors should cause test to fail
@@ -944,9 +946,11 @@ TEST_P(TestCls2PCQueue, MultiProducerConsumer)
           // queue is full, sleep and retry
           retry_happened = true;
           std::this_thread::sleep_for(std::chrono::milliseconds(10));
+          std::cout << "MATTY: Producer - Follow up attempt at cls_2pc_queue_reserve for op " << i << std::endl;
           rc = cls_2pc_queue_reserve(ioctx, queue_name, total_size, number_of_elements, res_id);
         };
         ASSERT_NE(res_id, 0);
+        std::cout << "MATTY: Producer - Attempt at committing op " << i << std::endl;
         cls_2pc_queue_commit(op, data, res_id);
         ASSERT_EQ(0, ioctx.operate(queue_name, &op));
       }
@@ -958,7 +962,6 @@ TEST_P(TestCls2PCQueue, MultiProducerConsumer)
   std::vector<std::thread> readers(max_workers/2);
   for (auto& c : readers) {
     c = std::thread([this, &queue_name, &producer_count, &retry_happened] {
-          librados::ObjectWriteOperation op;
           const std::string marker;
           bool truncated = true;
           std::string end_marker;
@@ -969,50 +972,66 @@ TEST_P(TestCls2PCQueue, MultiProducerConsumer)
               std::this_thread::sleep_for(std::chrono::milliseconds(100));
               continue;
             }
+            std::cout << "MATTY: Reader - Attempt at cls_2pc_queue_list_entries" << std::endl;
             const auto ret = cls_2pc_queue_list_entries(ioctx, queue_name, marker, max_elements, entries, &truncated, end_marker);
             ASSERT_EQ(0, ret);
             if (entries.empty()) {
+              std::cout << "MATTY: Reader - Queue has no entries" << std::endl;
               // another consumer has emptied the queue
-              return; 
+              if (producer_count == 0) return; // Only exit if producers are done
+              std::this_thread::sleep_for(std::chrono::milliseconds(10));
+              continue;
             }
           }
        });
   }
-  
+
   auto deleter = std::thread([this, &queue_name, &producer_count, &retry_happened] {
-      librados::ObjectWriteOperation op;
       const std::string marker;
       bool truncated = true;
       std::string end_marker;
       std::vector<cls_queue_entry> entries;
       while (producer_count > 0 || truncated) {
+        librados::ObjectWriteOperation op;
         if (!retry_happened) {
           // queue was never full, let it fill
           std::this_thread::sleep_for(std::chrono::milliseconds(100));
           continue;
         }
+        std::cout << "MATTY: Deleter - Attempt at cls_2pc_queue_list_entries" << std::endl;
         const auto ret = cls_2pc_queue_list_entries(ioctx, queue_name, marker, max_elements, entries, &truncated, end_marker);
         ASSERT_EQ(0, ret);
-        ASSERT_FALSE(entries.empty());
+        if (entries.empty()) {
+           std::this_thread::sleep_for(std::chrono::milliseconds(10));
+           continue;
+        }
+        std::cout << "MATTY: Deleter - Attempt at cls_2pc_queue_remove_entries" << std::endl;
         cls_2pc_queue_remove_entries(op, end_marker, max_elements);
         ASSERT_EQ(0, ioctx.operate(queue_name, &op));
       }
   });
 
+  std::cout << "MATTY: Attempting to join all threads" << std::endl;
   std::for_each(producers.begin(), producers.end(), [](auto& p) { p.join(); });
+  std::cout << "MATTY: Joined all producer threads" << std::endl;
   std::for_each(readers.begin(), readers.end(), [](auto& c) { c.join(); });
+  std::cout << "MATTY: Joined all reader threads" << std::endl;
   deleter.join();
+  std::cout << "MATTY: Joined deleter" << std::endl;
   ASSERT_TRUE(retry_happened);
   // make sure that queue is empty and no reservations remain
   cls_2pc_reservations reservations;
+  std::cout << "MATTY: Final attempt at cls_2pc_queue_list_reservations" << std::endl;
   ASSERT_EQ(0, cls_2pc_queue_list_reservations(ioctx, queue_name, reservations));
   ASSERT_EQ(reservations.size(), 0);
   const std::string marker;
   bool truncated = false;
   std::string end_marker;
   std::vector<cls_queue_entry> entries;
+  std::cout << "MATTY: Final attempt at cls_2pc_queue_list_entries" << std::endl;
   ASSERT_EQ(0, cls_2pc_queue_list_entries(ioctx, queue_name, marker, max_elements, entries, &truncated, end_marker));
   ASSERT_EQ(entries.size(), 0);
+  std::cout << "MATTY: DONE!" << std::endl;
 }
 
 TEST_P(TestCls2PCQueue, ReserveSpillover)

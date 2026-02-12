@@ -300,7 +300,7 @@ std::ostream& Watch::gen_dbg_prefix(std::ostream& out) {
 Watch::Watch(
   PrimaryLogPG *pg,
   OSDService *osd,
-  ObjectContextRef obc,
+  std::shared_ptr<ObjectContext> obc,
   uint32_t timeout,
   uint64_t cookie,
   entity_name_t entity,
@@ -517,7 +517,7 @@ void Watch::notify_ack(uint64_t notify_id, bufferlist& reply_bl)
 
 WatchRef Watch::makeWatchRef(
   PrimaryLogPG *pg, OSDService *osd,
-  ObjectContextRef obc, uint32_t timeout, uint64_t cookie, entity_name_t entity, const entity_addr_t& addr)
+  std::shared_ptr<ObjectContext> obc, uint32_t timeout, uint64_t cookie, entity_name_t entity, const entity_addr_t& addr)
 {
   WatchRef ret(new Watch(pg, osd, obc, timeout, cookie, entity, addr));
   ret->set_self(ret);

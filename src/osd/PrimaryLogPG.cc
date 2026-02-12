@@ -468,6 +468,12 @@ void PrimaryLogPG::on_local_recover(
 
       ceph_assert(recovering.count(obc->obs.oi.soid));
       recovering[obc->obs.oi.soid] = obc;
+      ldout(cct, 0) << "MATTY OBC_REF: recovering_update"
+                    << " oid=" << obc->obs.oi.soid
+                    << " ptr=" << (void*)obc.get()
+                    << " refcnt=" << obc.use_count()
+                    << " caller=" << __func__ << ":" << __LINE__
+                    << dendl;
       obc->obs.oi = recovery_info.oi;  // may have been updated above
     }
 
@@ -519,6 +525,12 @@ void PrimaryLogPG::on_global_recover(
 
   backfills_in_flight.erase(soid);
 
+  ldout(cct, 0) << "MATTY OBC_REF: recovering_erase"
+                << " oid=" << soid
+                << " ptr=" << (i->second ? (void*)i->second.get() : nullptr)
+                << " refcnt=" << (i->second ? i->second.use_count() : 0)
+                << " caller=" << __func__ << ":" << __LINE__
+                << dendl;
   recovering.erase(i);
   finish_recovery_op(soid);
   release_backoffs(soid);
@@ -3568,6 +3580,12 @@ void PrimaryLogPG::cancel_manifest_ops(bool requeue, vector<ceph_tid_t> *tids)
       mop->cb->set_requeue(requeue);
       mop->cb->complete(-ECANCELED);
     }
+    ldout(cct, 0) << "MATTY OBC_REF: manifest_ops_erase_cancel"
+                  << " oid=" << mop->obc->obs.oi.soid
+                  << " obc_ptr=" << (void*)mop->obc.get()
+                  << " obc_refcnt=" << mop->obc.use_count()
+                  << " caller=" << __func__ << ":" << __LINE__
+                  << dendl;
     manifest_ops.erase(p++);
   }
 }
@@ -3790,6 +3808,12 @@ bool PrimaryLogPG::inc_refcount_by_set(OpContext* ctx, object_manifest_t& set_ch
     }
     if (mop->tids.size()) {
       mop->cb = new RefCountCallback(ctx, osd_op);
+      ldout(cct, 0) << "MATTY OBC_REF: manifest_ops_insert"
+                    << " oid=" << ctx->obs->oi.soid
+                    << " obc_ptr=" << (void*)mop->obc.get()
+                    << " obc_refcnt=" << mop->obc.use_count()
+                    << " caller=" << __func__ << ":" << __LINE__
+                    << dendl;
       manifest_ops[ctx->obs->oi.soid] = mop;
       manifest_ops[ctx->obs->oi.soid]->op = ctx->op;
     }
@@ -4836,6 +4860,12 @@ int PrimaryLogPG::trim_object(
   }
 
   OpContextUPtr ctx = simple_opc_create(obc);
+  ldout(cct, 0) << "MATTY OBC_REF: ctx_head_obc_assign"
+                << " oid=" << head_obc->obs.oi.soid
+                << " obc_ptr=" << (void*)head_obc.get()
+                << " obc_refcnt=" << head_obc.use_count()
+                << " caller=" << __func__ << ":" << __LINE__
+                << dendl;
   ctx->head_obc = head_obc;
 
   if (!ctx->lock_manager.get_snaptrimmer_write(
@@ -7329,6 +7359,12 @@ int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	  fin->tid = tid;
 	  mop->num_chunks++;
 	  mop->tids[0] = tid;
+	  ldout(cct, 0) << "MATTY OBC_REF: manifest_ops_insert"
+	                << " oid=" << soid
+	                << " obc_ptr=" << (void*)mop->obc.get()
+	                << " obc_refcnt=" << mop->obc.use_count()
+	                << " caller=" << __func__ << ":" << __LINE__
+	                << dendl;
 	  manifest_ops[soid] = mop;
 	  ctx->obc->start_block();
 	  result = -EINPROGRESS;
@@ -8820,11 +8856,17 @@ void PrimaryLogPG::make_writeable(OpContext *ctx)
     if (is_primary()) {
       ctx->clone_obc = object_contexts.lookup_or_create(static_snap_oi.soid);
       ctx->clone_obc->destructor_callback =
-	new C_PG_ObjectContext(this, ctx->clone_obc.get());
+ new C_PG_ObjectContext(this, ctx->clone_obc.get());
       ctx->clone_obc->obs.oi = static_snap_oi;
       ctx->clone_obc->obs.exists = true;
       ctx->clone_obc->ssc = ctx->obc->ssc;
       ctx->clone_obc->ssc->ref++;
+      ldout(cct, 0) << "MATTY OBC_REF: ctx_clone_obc_assign"
+                    << " oid=" << static_snap_oi.soid
+                    << " obc_ptr=" << (void*)ctx->clone_obc.get()
+                    << " obc_refcnt=" << ctx->clone_obc.use_count()
+                    << " caller=" << __func__ << ":" << __LINE__
+                    << dendl;
       if (pool.info.is_erasure())
 	ctx->clone_obc->attr_cache = ctx->obc->attr_cache;
       snap_oi = &ctx->clone_obc->obs.oi;
@@ -9625,9 +9667,15 @@ void PrimaryLogPG::start_copy(CopyCallback *cb, ObjectContextRef obc,
   }
 
   CopyOpRef cop(std::make_shared<CopyOp>(cb, obc, src, oloc, version, flags,
-			   mirror_snapset, src_obj_fadvise_flags,
-			   dest_obj_fadvise_flags));
+  	   mirror_snapset, src_obj_fadvise_flags,
+  	   dest_obj_fadvise_flags));
   copy_ops[dest] = cop;
+  ldout(cct, 0) << "MATTY OBC_REF: copy_ops_insert"
+                << " dest=" << dest
+                << " obc_ptr=" << (obc ? (void*)obc.get() : nullptr)
+                << " obc_refcnt=" << (obc ? obc.use_count() : 0)
+                << " caller=" << __func__ << ":" << __LINE__
+                << dendl;
   dout(20) << fmt::format("{}: blocking {}", __func__, dest) << dendl;
   obc->start_block();
 
@@ -9982,6 +10030,12 @@ void PrimaryLogPG::process_copy_chunk(hobject_t oid, ceph_tid_t tid, int r)
   CopyCallbackResults results(r, &cop->results);
   cop->cb->complete(results);
 
+  ldout(cct, 0) << "MATTY OBC_REF: copy_ops_erase"
+                << " oid=" << cobc->obs.oi.soid
+                << " obc_ptr=" << (void*)cobc.get()
+                << " obc_refcnt=" << cobc.use_count()
+                << " caller=" << __func__ << ":" << __LINE__
+                << dendl;
   copy_ops.erase(cobc->obs.oi.soid);
   cobc->stop_block();
 
@@ -10108,6 +10162,12 @@ void PrimaryLogPG::process_copy_chunk_manifest(hobject_t oid, ceph_tid_t tid, in
   CopyCallbackResults results(r, &obj_cop->results);
   obj_cop->cb->complete(results);
 
+  ldout(cct, 0) << "MATTY OBC_REF: copy_ops_erase_manifest"
+                << " oid=" << cobc->obs.oi.soid
+                << " obc_ptr=" << (void*)cobc.get()
+                << " obc_refcnt=" << cobc.use_count()
+                << " caller=" << __func__ << ":" << __LINE__
+                << dendl;
   copy_ops.erase(cobc->obs.oi.soid);
   cobc->stop_block();
 
@@ -10563,6 +10623,12 @@ void PrimaryLogPG::cancel_copy(CopyOpRef cop, bool requeue,
     }
   }
 
+  ldout(cct, 0) << "MATTY OBC_REF: copy_ops_erase_cancel"
+                << " oid=" << cop->obc->obs.oi.soid
+                << " obc_ptr=" << (void*)cop->obc.get()
+                << " obc_refcnt=" << cop->obc.use_count()
+                << " caller=" << __func__ << ":" << __LINE__
+                << dendl;
   copy_ops.erase(cop->obc->obs.oi.soid);
   cop->obc->stop_block();
 
@@ -10574,6 +10640,12 @@ void PrimaryLogPG::cancel_copy(CopyOpRef cop, bool requeue,
   // There may still be an objecter callback referencing this copy op.
   // That callback will not need the obc since it's been canceled, and
   // we need the obc reference to go away prior to flush.
+  ldout(cct, 0) << "MATTY OBC_REF: copy_op_obc_reset"
+                << " oid=" << cop->obc->obs.oi.soid
+                << " obc_ptr=" << (void*)cop->obc.get()
+                << " obc_refcnt=" << cop->obc.use_count()
+                << " caller=" << __func__ << ":" << __LINE__
+                << dendl;
   cop->obc = ObjectContextRef();
 }
 
@@ -10770,6 +10842,12 @@ int PrimaryLogPG::start_dedup(OpRequestRef op, ObjectContextRef obc)
   }
 
   if (mop->tids.size()) {
+    ldout(cct, 0) << "MATTY OBC_REF: manifest_ops_insert"
+                  << " oid=" << soid
+                  << " obc_ptr=" << (void*)mop->obc.get()
+                  << " obc_refcnt=" << mop->obc.use_count()
+                  << " caller=" << __func__ << ":" << __LINE__
+                  << dendl;
     manifest_ops[soid] = mop;
     manifest_ops[soid]->op = op;
   } else {
@@ -10899,6 +10977,12 @@ int PrimaryLogPG::finish_set_dedup(hobject_t oid, int r, ceph_tid_t tid, uint64_
   if (mop->results[0] < 0) {
     // check if the previous op returns fail
     ceph_assert(mop->num_chunks == mop->results.size());
+    ldout(cct, 0) << "MATTY OBC_REF: manifest_ops_erase_error"
+                  << " oid=" << oid
+                  << " obc_ptr=" << (void*)mop->obc.get()
+                  << " obc_refcnt=" << mop->obc.use_count()
+                  << " caller=" << __func__ << ":" << __LINE__
+                  << dendl;
     manifest_ops.erase(oid);
     osd->reply_op_error(mop->op, mop->results[0]);
     return -EIO;
@@ -10916,7 +11000,7 @@ int PrimaryLogPG::finish_set_dedup(hobject_t oid, int r, ceph_tid_t tid, uint64_
     } else if (mop->op) {
       dout(10) << __func__ << " waiting on write lock " << mop->op << dendl;
       close_op_ctx(ctx.release());
-      return -EAGAIN;    
+      return -EAGAIN;
     }
 
     ctx->at_version = get_next_version();
@@ -10929,15 +11013,15 @@ int PrimaryLogPG::finish_set_dedup(hobject_t oid, int r, ceph_tid_t tid, uint64_
       ctx->new_obs.oi.manifest.type = object_manifest_t::TYPE_CHUNKED;
     }
 
-    /* 
+    /*
     * Let's assume that there is a manifest snapshotted object, and we issue tier_flush() to head.
     * head: [0, 2) aaa <-- tier_flush()
     * 20:   [0, 2) ddd, [6, 2) bbb, [8, 2) ccc
-    * 
+    *
     * In this case, if the new chunk_map is as follows,
     * new_chunk_map : [0, 2) ddd, [6, 2) bbb, [8, 2) ccc
     * we should drop aaa from head by using calc_refs_to_drop_on_removal().
-    * So, the precedure is 
+    * So, the precedure is
     * 	1. calc_refs_to_drop_on_removal()
     * 	2. register old references to drop after tier_flush() is committed
     * 	3. update new chunk_map
@@ -10945,7 +11029,7 @@ int PrimaryLogPG::finish_set_dedup(hobject_t oid, int r, ceph_tid_t tid, uint64_
 
     ObjectCleanRegions c_regions = ctx->clean_regions;
     ObjectContextRef cobc = get_prev_clone_obc(obc);
-    c_regions.mark_fully_dirty(); 
+    c_regions.mark_fully_dirty();
     // CDC was done on entire range of manifest object,
     // so the first thing we should do here is to drop the reference to old chunks
     ObjectContextRef obc_l, obc_g;
@@ -10972,6 +11056,12 @@ int PrimaryLogPG::finish_set_dedup(hobject_t oid, int r, ceph_tid_t tid, uint64_
   if (mop->op)
     osd->reply_op_error(mop->op, r);
 
+  ldout(cct, 0) << "MATTY OBC_REF: manifest_ops_erase_success"
+                << " oid=" << oid
+                << " obc_ptr=" << (void*)mop->obc.get()
+                << " obc_refcnt=" << mop->obc.use_count()
+                << " caller=" << __func__ << ":" << __LINE__
+                << dendl;
   manifest_ops.erase(oid);
   return 0;
 }
@@ -11000,10 +11090,16 @@ int PrimaryLogPG::finish_set_manifest_refcount(hobject_t oid, int r, ceph_tid_t 
     mop->cb->complete(r);
   }
 
+  ldout(cct, 0) << "MATTY OBC_REF: manifest_ops_erase_complete"
+                << " oid=" << mop->obc->obs.oi.soid
+                << " obc_ptr=" << (void*)mop->obc.get()
+                << " obc_refcnt=" << mop->obc.use_count()
+                << " caller=" << __func__ << ":" << __LINE__
+                << dendl;
   manifest_ops.erase(p);
   mop.reset();
 
-  return 0; 
+  return 0;
 }
 
 int PrimaryLogPG::start_flush(
@@ -11210,6 +11306,12 @@ int PrimaryLogPG::start_flush(
   fop->objecter_tid = tid;
 
   flush_ops[soid] = fop;
+  ldout(cct, 0) << "MATTY OBC_REF: flush_ops_insert"
+                << " oid=" << soid
+                << " obc_ptr=" << (obc ? (void*)obc.get() : nullptr)
+                << " obc_refcnt=" << (obc ? obc.use_count() : 0)
+                << " caller=" << __func__ << ":" << __LINE__
+                << dendl;
 
   recovery_state.update_stats(
     [&oi](auto &history, auto &stats) {
@@ -11254,6 +11356,12 @@ void PrimaryLogPG::finish_flush(hobject_t oid, ceph_tid_t tid, int r)
       (*(fop->on_flush))();
       fop->on_flush = std::nullopt;
     }
+    ldout(cct, 0) << "MATTY OBC_REF: flush_ops_erase_error"
+                  << " oid=" << oid
+                  << " obc_ptr=" << (obc ? (void*)obc.get() : nullptr)
+                  << " obc_refcnt=" << (obc ? obc.use_count() : 0)
+                  << " caller=" << __func__ << ":" << __LINE__
+                  << dendl;
     flush_ops.erase(oid);
     return;
   }
@@ -11291,6 +11399,12 @@ int PrimaryLogPG::try_flush_mark_clean(FlushOpRef fop)
       (*(fop->on_flush))();
       fop->on_flush = std::nullopt;
     }
+    ldout(cct, 0) << "MATTY OBC_REF: flush_ops_erase_version_mismatch"
+                  << " oid=" << oid
+                  << " obc_ptr=" << (void*)obc.get()
+                  << " obc_refcnt=" << obc.use_count()
+                  << " caller=" << __func__ << ":" << __LINE__
+                  << dendl;
     flush_ops.erase(oid);
     if (fop->blocking)
       osd->logger->inc(l_osd_tier_flush_fail);
@@ -11324,6 +11438,12 @@ int PrimaryLogPG::try_flush_mark_clean(FlushOpRef fop)
       (*(fop->on_flush))();
       fop->on_flush = std::nullopt;
     }
+    ldout(cct, 0) << "MATTY OBC_REF: flush_ops_erase_evict"
+                  << " oid=" << oid
+                  << " obc_ptr=" << (void*)obc.get()
+                  << " obc_refcnt=" << obc.use_count()
+                  << " caller=" << __func__ << ":" << __LINE__
+                  << dendl;
     flush_ops.erase(oid);
     return 0;
   }
@@ -11424,6 +11544,12 @@ int PrimaryLogPG::try_flush_mark_clean(FlushOpRef fop)
 
   simple_opc_submit(std::move(ctx));
 
+  ldout(cct, 0) << "MATTY OBC_REF: flush_ops_erase_success"
+                << " oid=" << oid
+                << " obc_ptr=" << (void*)obc.get()
+                << " obc_refcnt=" << obc.use_count()
+                << " caller=" << __func__ << ":" << __LINE__
+                << dendl;
   flush_ops.erase(oid);
 
   if (fop->blocking)
@@ -11462,6 +11588,12 @@ void PrimaryLogPG::cancel_flush(FlushOpRef fop, bool requeue,
     (*(fop->on_flush))();
     fop->on_flush = std::nullopt;
   }
+  ldout(cct, 0) << "MATTY OBC_REF: flush_ops_erase_cancel"
+                << " oid=" << fop->obc->obs.oi.soid
+                << " obc_ptr=" << (void*)fop->obc.get()
+                << " obc_refcnt=" << fop->obc.use_count()
+                << " caller=" << __func__ << ":" << __LINE__
+                << dendl;
   flush_ops.erase(fop->obc->obs.oi.soid);
 }
 
@@ -11726,6 +11858,14 @@ PrimaryLogPG::OpContextUPtr PrimaryLogPG::simple_opc_create(ObjectContextRef obc
   OpContextUPtr ctx(new OpContext(OpRequestRef(), reqid, nullptr, obc, this));
   ctx->op_t.reset(new PGTransaction());
   ctx->mtime = ceph_clock_now();
+  ldout(cct, 0) << "MATTY OBC_REF: simple_opc_create"
+                << " oid=" << obc->obs.oi.soid
+                << " obc_ptr=" << (void*)obc.get()
+                << " obc_refcnt=" << obc.use_count()
+                << " ctx_obc_ptr=" << (void*)ctx->obc.get()
+                << " ctx_obc_refcnt=" << ctx->obc.use_count()
+                << " caller=" << __func__ << ":" << __LINE__
+                << dendl;
   return ctx;
 }
 
@@ -11864,7 +12004,7 @@ void PrimaryLogPG::cancel_log_updates()
 void PrimaryLogPG::get_watchers(list<obj_watch_item_t> *ls)
 {
   std::scoped_lock l{*this};
-  pair<hobject_t, ObjectContextRef> i;
+  pair<hobject_t, std::shared_ptr<ObjectContext>> i;
   while (object_contexts.get_next(i.first, &i)) {
     ObjectContextRef obc(i.second);
     get_obc_watchers(obc, *ls);
@@ -11895,7 +12035,7 @@ void PrimaryLogPG::get_obc_watchers(ObjectContextRef obc, list<obj_watch_item_t>
 void PrimaryLogPG::check_blocklisted_watchers()
 {
   dout(20) << "PrimaryLogPG::check_blocklisted_watchers for pg " << get_pgid() << dendl;
-  pair<hobject_t, ObjectContextRef> i;
+  pair<hobject_t, std::shared_ptr<ObjectContext>> i;
   while (object_contexts.get_next(i.first, &i))
     check_blocklisted_obc_watchers(i.second);
 }
@@ -12035,6 +12175,7 @@ ObjectContextRef PrimaryLogPG::create_object_context(const object_info_t& oi,
 {
   ObjectContextRef obc(object_contexts.lookup_or_create(oi.soid));
   ceph_assert(obc->destructor_callback == NULL);
+  obc->cct = cct;  // Set CephContext for logging
   obc->destructor_callback = new C_PG_ObjectContext(this, obc.get());
   obc->obs.oi = oi;
   obc->obs.exists = false;
@@ -12042,6 +12183,12 @@ ObjectContextRef PrimaryLogPG::create_object_context(const object_info_t& oi,
   if (ssc)
     register_snapset_context(ssc);
   dout(10) << "create_object_context " << (void*)obc.get() << " " << oi.soid << " " << dendl;
+  ldout(cct, 0) << "MATTY OBC_REF: create_object_context"
+                << " oid=" << oi.soid
+                << " obc_ptr=" << (void*)obc.get()
+                << " obc_refcnt=" << obc.use_count()
+                << " caller=" << __func__ << ":" << __LINE__
+                << dendl;
   if (is_active())
     populate_obc_watchers(obc);
   return obc;
@@ -12064,7 +12211,13 @@ ObjectContextRef PrimaryLogPG::get_object_context(
   if (obc) {
     osd->logger->inc(l_osd_object_ctx_cache_hit);
     dout(10) << __func__ << ": found obc in cache: " << *obc
-	     << dendl;
+      << dendl;
+    ldout(cct, 0) << "MATTY OBC_REF: get_object_context_cache_hit"
+                  << " oid=" << soid
+                  << " obc_ptr=" << (void*)obc.get()
+                  << " obc_refcnt=" << obc.use_count()
+                  << " caller=" << __func__ << ":" << __LINE__
+                  << dendl;
   } else {
     dout(10) << __func__ << ": obc NOT found in cache: " << soid << dendl;
     // check disk
@@ -12080,6 +12233,11 @@ ObjectContextRef PrimaryLogPG::get_object_context(
 	  dout(10) << __func__ << ": no obc for soid "
 		   << soid << " and !can_create"
 		   << dendl;
+	  ldout(cct, 0) << "MATTY OBC_REF: get_object_context_not_found"
+	                << " oid=" << soid
+	                << " can_create=false"
+	                << " caller=" << __func__ << ":" << __LINE__
+	                << dendl;
 	  return ObjectContextRef();   // -ENOENT!
 	}
 
@@ -12095,6 +12253,12 @@ ObjectContextRef PrimaryLogPG::get_object_context(
 	dout(10) << __func__ << ": " << *obc
 		 << " oi: " << obc->obs.oi
 		 << " " << *obc->ssc << dendl;
+	ldout(cct, 0) << "MATTY OBC_REF: get_object_context_new_object"
+	              << " oid=" << soid
+	              << " obc_ptr=" << (void*)obc.get()
+	              << " obc_refcnt=" << obc.use_count()
+	              << " caller=" << __func__ << ":" << __LINE__
+	              << dendl;
 	return obc;
       }
     }
@@ -12105,12 +12269,17 @@ ObjectContextRef PrimaryLogPG::get_object_context(
       decode(oi, bliter);
     } catch (...) {
       dout(0) << __func__ << ": obc corrupt: " << soid << dendl;
+      ldout(cct, 0) << "MATTY OBC_REF: get_object_context_corrupt"
+                    << " oid=" << soid
+                    << " caller=" << __func__ << ":" << __LINE__
+                    << dendl;
       return ObjectContextRef();   // -ENOENT!
     }
 
     ceph_assert(oi.soid.pool == (int64_t)info.pgid.pool());
 
     obc = object_contexts.lookup_or_create(oi.soid);
+    obc->cct = cct;  // Set CephContext for logging
     obc->destructor_callback = new C_PG_ObjectContext(this, obc.get());
     obc->obs.oi = oi;
     obc->obs.exists = true;
@@ -12134,25 +12303,43 @@ ObjectContextRef PrimaryLogPG::get_object_context(
     }
 
     dout(10) << __func__ << ": creating obc from disk: " << *obc
-	     << dendl;
+      << dendl;
+    ldout(cct, 0) << "MATTY OBC_REF: get_object_context_from_disk"
+                  << " oid=" << soid
+                  << " obc_ptr=" << (void*)obc.get()
+                  << " obc_refcnt=" << obc.use_count()
+                  << " caller=" << __func__ << ":" << __LINE__
+                  << dendl;
   }
 
   // XXX: Caller doesn't expect this
   if (obc->ssc == NULL) {
     derr << __func__ << ": obc->ssc not available, not returning context" << dendl;
+    ldout(cct, 0) << "MATTY OBC_REF: get_object_context_no_ssc"
+                  << " oid=" << soid
+                  << " obc_ptr=" << (void*)obc.get()
+                  << " obc_refcnt=" << obc.use_count()
+                  << " caller=" << __func__ << ":" << __LINE__
+                  << dendl;
     return ObjectContextRef();   // -ENOENT!
   }
 
   dout(10) << __func__ << ": " << *obc
-	   << " oi: " << obc->obs.oi
-	   << " exists: " << (int)obc->obs.exists
-	   << " " << *obc->ssc << dendl;
+    << " oi: " << obc->obs.oi
+    << " exists: " << (int)obc->obs.exists
+    << " " << *obc->ssc << dendl;
+  ldout(cct, 0) << "MATTY OBC_REF: get_object_context_return"
+                << " oid=" << soid
+                << " obc_ptr=" << (void*)obc.get()
+                << " obc_refcnt=" << obc.use_count()
+                << " caller=" << __func__ << ":" << __LINE__
+                << dendl;
   return obc;
 }
 
 void PrimaryLogPG::context_registry_on_change()
 {
-  pair<hobject_t, ObjectContextRef> i;
+  pair<hobject_t, std::shared_ptr<ObjectContext>> i;
   while (object_contexts.get_next(i.first, &i)) {
     ObjectContextRef obc(i.second);
     if (obc) {
@@ -12552,6 +12739,10 @@ int PrimaryLogPG::recover_missing(
     start_recovery_op(soid);
     ceph_assert(!recovering.count(soid));
     recovering.insert(make_pair(soid, ObjectContextRef()));
+    ldout(cct, 0) << "MATTY OBC_REF: recovering_insert_null"
+                  << " oid=" << soid
+                  << " caller=" << __func__ << ":" << __LINE__
+                  << dendl;
     epoch_t cur_epoch = get_osdmap_epoch();
     remove_missing_object(soid, v, new LambdaContext(
      [=, this](int) {
@@ -12611,6 +12802,12 @@ int PrimaryLogPG::recover_missing(
   start_recovery_op(soid);
   ceph_assert(!recovering.count(soid));
   recovering.insert(make_pair(soid, obc));
+  ldout(cct, 0) << "MATTY OBC_REF: recovering_insert"
+                << " oid=" << soid
+                << " ptr=" << (void*)obc.get()
+                << " refcnt=" << (obc ? obc.use_count() : 0)
+                << " caller=" << __func__ << ":" << __LINE__
+                << dendl;
   int r = pgbackend->recover_object(
     soid,
     v,
@@ -12702,6 +12899,12 @@ void PrimaryLogPG::_applied_recovered_object(ObjectContextRef obc)
   dout(20) << __func__ << dendl;
   if (obc) {
     dout(20) << "obc = " << *obc << dendl;
+    ldout(cct, 0) << "MATTY OBC_REF: _applied_recovered_object"
+                  << " oid=" << obc->obs.oi.soid
+                  << " ptr=" << (void*)obc.get()
+                  << " refcnt=" << obc.use_count()
+                  << " caller=" << __func__ << ":" << __LINE__
+                  << dendl;
   }
   ceph_assert(active_pushes >= 1);
   --active_pushes;
@@ -13091,7 +13294,7 @@ void PrimaryLogPG::on_flushed()
 {
   requeue_ops(waiting_for_flush);
   if (!is_peered() || !is_primary()) {
-    pair<hobject_t, ObjectContextRef> i;
+    pair<hobject_t, std::shared_ptr<ObjectContext>> i;
     while (object_contexts.get_next(i.first, &i)) {
       derr << __func__ << ": object " << i.first << " obc still alive" << dendl;
     }
@@ -13238,6 +13441,32 @@ void PrimaryLogPG::on_activate_complete()
 void PrimaryLogPG::on_change(ObjectStore::Transaction &t)
 {
   dout(10) << __func__ << dendl;
+  ldout(cct, 0) << "MATTY DEBUG: on_change START" << dendl;
+  pair<hobject_t, std::shared_ptr<ObjectContext>> i;
+  while (object_contexts.get_next(i.first, &i)) {
+    ldout(cct, 0) << "MATTY DEBUG: Waiters Check:"
+                  << " waiters=" << i.second->waiters.size()
+                  << " watchers=" << i.second->watchers.size()
+                  << " ssc_ref=" << (i.second->ssc ? i.second->ssc->ref : -1)
+                << dendl;
+  }
+  ldout(cct, 0) << "MATTY DEBUG: Active Lists:"
+                << " in_progress_async_reads=" << in_progress_async_reads.size()
+                << " repop_queue=" << repop_queue.size()
+                << " waiting_for_degraded=" << waiting_for_degraded_object.size()
+                << dendl;
+  ldout(cct, 0) << "MATTY DEBUG: Blocked Lists Check:"
+                << " waiting_for_blocked_object=" << waiting_for_blocked_object.size()
+                << " waiting_for_unreadable_object=" << waiting_for_unreadable_object.size()
+                << " waiting_for_scrub=" << waiting_for_scrub.size()
+                << dendl;
+  ldout(cct, 0) << "MATTY DEBUG: OBSCURE LISTS:"
+                << " waiting_for_readable=" << waiting_for_readable.size()
+                << " waiting_for_active=" << waiting_for_active.size()
+                << " waiting_for_flush=" << waiting_for_flush.size()
+                << " waiting_for_peered=" << waiting_for_peered.size()
+                << " callbacks_for_degraded=" << callbacks_for_degraded_object.size()
+                << dendl;
 
   if (coro_resumer != nullptr) {
     dout(20) << __func__ << ": Stopping active coroutine" << dendl;
@@ -13368,6 +13597,7 @@ void PrimaryLogPG::on_change(ObjectStore::Transaction &t)
   // NOTE: we actually assert that all currently live references are dead
   // by the time the flush for the next interval completes.
   object_contexts.clear();
+  object_contexts.dump_weak_refs();
 
   // should have been cleared above by finishing all of the degraded objects
   ceph_assert(objects_blocked_on_degraded_snap.empty());
@@ -13419,6 +13649,12 @@ void PrimaryLogPG::_clear_recovery_state()
   for (map<hobject_t, ObjectContextRef>::iterator i = recovering.begin();
        i != recovering.end();
        recovering.erase(i++)) {
+    ldout(cct, 0) << "MATTY OBC_REF: recovering_erase_on_change"
+                  << " oid=" << i->first
+                  << " ptr=" << (i->second ? (void*)i->second.get() : nullptr)
+                  << " refcnt=" << (i->second ? i->second.use_count() : 0)
+                  << " caller=" << __func__ << ":" << __LINE__
+                  << dendl;
     if (i->second) {
       i->second->drop_recovery_read(&blocked_ops);
       requeue_ops(blocked_ops);
@@ -13435,11 +13671,23 @@ void PrimaryLogPG::cancel_pull(const hobject_t &soid)
   dout(20) << __func__ << ": " << soid << dendl;
   ceph_assert(recovering.count(soid));
   ObjectContextRef obc = recovering[soid];
+  ldout(cct, 0) << "MATTY OBC_REF: recovering_access"
+                << " oid=" << soid
+                << " ptr=" << (obc ? (void*)obc.get() : nullptr)
+                << " refcnt=" << (obc ? obc.use_count() : 0)
+                << " caller=" << __func__ << ":" << __LINE__
+                << dendl;
   if (obc) {
     list<OpRequestRef> blocked_ops;
     obc->drop_recovery_read(&blocked_ops);
     requeue_ops(blocked_ops);
   }
+  ldout(cct, 0) << "MATTY OBC_REF: recovering_erase_cancel_pull"
+                << " oid=" << soid
+                << " ptr=" << (obc ? (void*)obc.get() : nullptr)
+                << " refcnt=" << (obc ? obc.use_count() : 0)
+                << " caller=" << __func__ << ":" << __LINE__
+                << dendl;
   recovering.erase(soid);
   finish_recovery_op(soid);
   release_backoffs(soid);
@@ -13827,10 +14075,27 @@ int PrimaryLogPG::prep_object_replica_deletes(
 
   start_recovery_op(soid);
   ceph_assert(!recovering.count(soid));
-  if (!obc)
+  ldout(cct, 0) << "MATTY OBC_REF: recovering_insert_prep_delete"
+                << " oid=" << soid
+                << " ptr=" << (obc ? (void*)obc.get() : nullptr)
+                << " refcnt=" << (obc ? obc.use_count() : 0)
+                << " caller=" << __func__ << ":" << __LINE__
+                << dendl;
+  if (!obc) {
     recovering.insert(make_pair(soid, ObjectContextRef()));
-  else
+    ldout(cct, 0) << "MATTY OBC_REF: recovering_insert_null_delete"
+                  << " oid=" << soid
+                  << " caller=" << __func__ << ":" << __LINE__
+                  << dendl;
+  } else {
     recovering.insert(make_pair(soid, obc));
+    ldout(cct, 0) << "MATTY OBC_REF: recovering_insert_delete"
+                  << " oid=" << soid
+                  << " ptr=" << (void*)obc.get()
+                  << " refcnt=" << obc.use_count()
+                  << " caller=" << __func__ << ":" << __LINE__
+                  << dendl;
+  }
 
   pgbackend->recover_delete_object(soid, v, h);
   return 1;
@@ -14464,6 +14729,12 @@ int PrimaryLogPG::prep_backfill_object_push(
 
   start_recovery_op(oid);
   recovering.insert(make_pair(oid, obc));
+  ldout(cct, 0) << "MATTY OBC_REF: recovering_insert_backfill"
+                << " oid=" << oid
+                << " ptr=" << (obc ? (void*)obc.get() : nullptr)
+                << " refcnt=" << (obc ? obc.use_count() : 0)
+                << " caller=" << __func__ << ":" << __LINE__
+                << dendl;
 
   int r = pgbackend->recover_object(
     oid,
@@ -15849,7 +16120,7 @@ void PrimaryLogPG::do_replica_scrub_map(OpRequestRef op)
 bool PrimaryLogPG::_range_available_for_scrub(const hobject_t& begin,
 					      const hobject_t& end)
 {
-  pair<hobject_t, ObjectContextRef> next;
+  pair<hobject_t, std::shared_ptr<ObjectContext>> next;
   next.second = object_contexts.lookup(begin);
   next.first = begin;
   bool more = true;

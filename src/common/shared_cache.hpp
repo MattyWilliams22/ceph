@@ -64,6 +64,12 @@ private:
     auto i = contents.find(key);
     if (i == contents.end())
       return;
+    if (cct) {
+      lgeneric_subdout(cct, osd, 0) << "MATTY OBC_REF: lru_remove"
+                                     << " key=" << key
+                                     << " size=" << size
+                                     << dendl;
+    }
     lru.erase(i->second);
     --size;
     contents.erase(i);
@@ -73,10 +79,24 @@ private:
     auto i = contents.find(key);
     if (i != contents.end()) {
       lru.splice(lru.begin(), lru, i->second);
+      if (cct) {
+        lgeneric_subdout(cct, osd, 0) << "MATTY OBC_REF: lru_add_existing"
+                                       << " key=" << key
+                                       << " ptr=" << (void*)val.get()
+                                       << " size=" << size
+                                       << dendl;
+      }
     } else {
       ++size;
       lru.push_front(make_pair(key, val));
       contents[key] = lru.begin();
+      if (cct) {
+        lgeneric_subdout(cct, osd, 0) << "MATTY OBC_REF: lru_add_new"
+                                       << " key=" << key
+                                       << " ptr=" << (void*)val.get()
+                                       << " size=" << size
+                                       << dendl;
+      }
       trim_cache(to_release);
     }
   }
@@ -85,6 +105,12 @@ private:
     std::lock_guard l{lock};
     auto i = weak_refs.find(key);
     if (i != weak_refs.end() && i->second.second == valptr) {
+      if (cct) {
+        lgeneric_subdout(cct, osd, 0) << "MATTY OBC_REF: remove_weak_ref"
+                                       << " key=" << key
+                                       << " ptr=" << (void*)valptr
+                                       << dendl;
+      }
       weak_refs.erase(i);
     }
     cond.notify_all();
@@ -149,6 +175,11 @@ public:
 
   //clear all strong reference from the lru.
   void clear() {
+    if (cct) {
+      lgeneric_subdout(cct, osd, 0) << "MATTY OBC_REF: clear_all"
+                                     << " size=" << size
+                                     << dendl;
+    }
     while (true) {
       VPtr val; // release any ref we have after we drop the lock
       std::lock_guard locker{lock};
@@ -156,6 +187,13 @@ public:
         break;
 
       val = lru.back().second;
+      if (cct && val) {
+        lgeneric_subdout(cct, osd, 0) << "MATTY OBC_REF: clear_item"
+                                       << " key=" << lru.back().first
+                                       << " ptr=" << (void*)val.get()
+                                       << " refcnt=" << val.use_count()
+                                       << dendl;
+      }
       lru_remove(lru.back().first);
     }
   }
@@ -166,9 +204,16 @@ public:
       std::lock_guard l{lock};
       auto i = weak_refs.find(key);
       if (i != weak_refs.end()) {
-	val = i->second.first.lock();
+ val = i->second.first.lock();
       }
       lru_remove(key);
+    }
+    if (cct && val) {
+      lgeneric_subdout(cct, osd, 0) << "MATTY OBC_REF: clear_key"
+                                     << " key=" << key
+                                     << " ptr=" << (void*)val.get()
+                                     << " refcnt=" << val.use_count()
+                                     << dendl;
     }
   }
 
@@ -182,9 +227,16 @@ public:
       auto from_iter = weak_refs.lower_bound(from);
       auto to_iter = weak_refs.upper_bound(to);
       for (auto i = from_iter; i != to_iter; ) {
-	vals.push_back(i->second.first.lock());
-	lru_remove((i++)->first);
+ vals.push_back(i->second.first.lock());
+ lru_remove((i++)->first);
       }
+    }
+    if (cct) {
+      lgeneric_subdout(cct, osd, 0) << "MATTY OBC_REF: clear_range"
+                                     << " from=" << from
+                                     << " to=" << to
+                                     << " count=" << vals.size()
+                                     << dendl;
     }
   }
 
@@ -195,10 +247,17 @@ public:
       std::lock_guard l{lock};
       auto i = weak_refs.find(key);
       if (i != weak_refs.end()) {
-	val = i->second.first.lock();
+        val = i->second.first.lock();
         weak_refs.erase(i);
       }
       lru_remove(key);
+    }
+    if (cct && val) {
+      lgeneric_subdout(cct, osd, 0) << "MATTY OBC_REF: purge"
+                                     << " key=" << key
+                                     << " ptr=" << (void*)val.get()
+                                     << " refcnt=" << val.use_count()
+                                     << dendl;
     }
   }
 
@@ -239,6 +298,13 @@ public:
         }
       });
       --waiting;
+    }
+    if (val && cct) {
+      lgeneric_subdout(cct, osd, 0) << "MATTY OBC_REF: lower_bound"
+                                     << " key=" << key
+                                     << " ptr=" << (void*)val.get()
+                                     << " refcnt=" << val.use_count()
+                                     << dendl;
     }
     return val;
   }
@@ -294,11 +360,19 @@ public:
       });
       --waiting;
     }
+    if (val && cct) {
+      lgeneric_subdout(cct, osd, 0) << "MATTY OBC_REF: lookup"
+                                     << " key=" << key
+                                     << " ptr=" << (void*)val.get()
+                                     << " refcnt=" << val.use_count()
+                                     << dendl;
+    }
     return val;
   }
   VPtr lookup_or_create(const K &key) {
     VPtr val;
     std::list<VPtr> to_release;
+    bool created = false;
     {
       std::unique_lock l{lock};
       cond.wait(l, [this, &key, &val] {
@@ -315,8 +389,17 @@ public:
       if (!val) {
         val = VPtr{new V{}, Cleanup{this, key}};
         weak_refs.insert(make_pair(key, make_pair(val, val.get())));
+        created = true;
       }
       lru_add(key, val, &to_release);
+    }
+    if (cct) {
+      lgeneric_subdout(cct, osd, 0) << "MATTY OBC_REF: lookup_or_create"
+                                     << " key=" << key
+                                     << " ptr=" << (void*)val.get()
+                                     << " refcnt=" << val.use_count()
+                                     << " created=" << created
+                                     << dendl;
     }
     return val;
   }
@@ -347,35 +430,45 @@ public:
   VPtr add(const K& key, V *value, bool *existed = NULL) {
     VPtr val;
     std::list<VPtr> to_release;
+    bool created = false;
     {
       typename std::map<K, std::pair<WeakVPtr, V*>, C>::iterator actual;
       std::unique_lock l{lock};
       cond.wait(l, [this, &key, &actual, &val] {
-	  actual = weak_refs.lower_bound(key);
-	  if (actual != weak_refs.end() && actual->first == key) {
-	    val = actual->second.first.lock();
-	    if (val) {
-	      return true;
-	    } else {
-	      return false;
-	    }
-	  } else {
-	    return true;
-	  }
+   actual = weak_refs.lower_bound(key);
+   if (actual != weak_refs.end() && actual->first == key) {
+     val = actual->second.first.lock();
+     if (val) {
+       return true;
+     } else {
+       return false;
+     }
+   } else {
+     return true;
+   }
       });
 
       if (val) {
-	if (existed) {
-	  *existed = true;
-	}
+ if (existed) {
+   *existed = true;
+ }
       } else {
-	if (existed) {
-	  *existed = false;
-	}
-	val = VPtr(value, Cleanup(this, key));
-	weak_refs.insert(actual, make_pair(key, make_pair(val, value)));
+ if (existed) {
+   *existed = false;
+ }
+ val = VPtr(value, Cleanup(this, key));
+ weak_refs.insert(actual, make_pair(key, make_pair(val, value)));
+ created = true;
       }
       lru_add(key, val, &to_release);
+    }
+    if (cct) {
+      lgeneric_subdout(cct, osd, 0) << "MATTY OBC_REF: add"
+                                     << " key=" << key
+                                     << " ptr=" << (void*)val.get()
+                                     << " refcnt=" << val.use_count()
+                                     << " created=" << created
+                                     << dendl;
     }
     return val;
   }
