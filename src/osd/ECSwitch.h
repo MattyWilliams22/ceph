@@ -262,7 +262,12 @@ public:
                         uint32_t op_flags, ceph::buffer::list *bl, uint64_t object_size,
                         std::optional<CoroHandles> coro) override
   {
-    // Sync reads are only supported in FastEC, and from a coroutine
+    // If run without a coroutine, replicate old behaviour
+    if (!coro.has_value()) {
+      return -EOPNOTSUPP;
+    }
+
+    // Sync reads are only supported in FastEC, from within a coroutine
     ceph_assert(is_optimized());
     ceph_assert(coro.has_value());
 

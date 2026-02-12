@@ -946,6 +946,7 @@ protected:
   std::unique_ptr<resume_token_t> coro_resumer = nullptr;
   bool coro_op_in_flight = false;
   std::list<OpRequestRef> waiting_for_coro_op;
+  OpContext* active_coro_ctx = nullptr;
 
   /**
    * Grabs locks for OpContext, should be cleaned up in close_op_ctx

@@ -1687,7 +1687,8 @@ bool PrimaryLogPG::get_rw_locks(bool write_ordered, OpContext *ctx)
    * to get the second.
    */
   if (write_ordered && ctx->op->may_read()) {
-    if (ctx->op->may_read_data()) {
+    if (ctx->op->may_read_data() ||
+      (ctx->op->may_write() && pool.info.is_erasure())) {
       ctx->lock_type = RWState::RWEXCL;
     } else {
       ctx->lock_type = RWState::RWWRITE;
@@ -2491,6 +2492,10 @@ void PrimaryLogPG::do_op_impl(OpRequestRef op)
 
   OpContext *ctx = new OpContext(op, m->get_reqid(), &m->ops, obc, this);
 
+  if (coro_op_in_flight && op == active_coro_op) {
+    active_coro_ctx = ctx;
+  }
+
   if (m->has_flag(CEPH_OSD_FLAG_SKIPRWLOCKS)) {
     dout(20) << __func__ << ": skipping rw locks" << dendl;
   } else if (m->get_flags() & CEPH_OSD_FLAG_FLUSH) {
@@ -2626,6 +2631,11 @@ void PrimaryLogPG::on_coroutine_complete()
   ceph_assert(coro_op_in_flight);
   coro_op_in_flight = false;
   active_coro_op = nullptr;
+
+  if (active_coro_ctx) {
+    dout(20) << __func__ << ": Warning - OpContext not cleaned up normally" << dendl;
+    active_coro_ctx = nullptr;
+  }
 
   if (!waiting_for_coro_op.empty()) {
     dout(20) << __func__ << ": requeuing " << waiting_for_coro_op.size() << " ops" << dendl;
@@ -4499,6 +4509,11 @@ void PrimaryLogPG::close_op_ctx(OpContext *ctx) {
        ctx->on_finish.erase(p++)) {
     (*p)();
   }
+
+  if (ctx == active_coro_ctx) {
+    active_coro_ctx = nullptr;
+  }
+
   delete ctx;
 }
 
@@ -13226,6 +13241,23 @@ void PrimaryLogPG::on_change(ObjectStore::Transaction &t)
 
   if (coro_resumer != nullptr) {
     dout(20) << __func__ << ": Stopping active coroutine" << dendl;
+
+    if (active_coro_ctx) {
+      dout(20) << __func__ << ": Cleaning up orphaned OpContext from coroutine" << dendl;
+      
+      // Remove from in_progress_async_reads if present
+      for (auto it = in_progress_async_reads.begin(); 
+          it != in_progress_async_reads.end(); ++it) {
+        if (it->second == active_coro_ctx) {
+          in_progress_async_reads.erase(it);
+          break;
+        }
+      }
+      
+      // Close the context to release all resources including ObjectContextRef
+      close_op_ctx(active_coro_ctx);
+      active_coro_ctx = nullptr;
+    }
     coro_resumer = nullptr;
     coro_op_in_flight = false;
   }
