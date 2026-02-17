@@ -115,6 +115,10 @@ class ECOmapJournal {
   std::map<hobject_t, std::list<ECOmapRemovedRanges>> removed_ranges_map;
   std::map<hobject_t, ECOmapHeader> header_map;
 
+  // Contains the set of versions corresponding to outstanding deletes
+  // and a lost object boolean
+  std::map<hobject_t, std::map<version_t, bool>> object_state_map;
+
   // Function to get specific object's unprocessed entries
   std::list<ECOmapJournalEntry>& get_entries(const hobject_t &hoid);
   std::list<ECOmapJournalEntry> snapshot_entries(const hobject_t &hoid) const;
@@ -137,6 +141,11 @@ class ECOmapJournal {
   [[nodiscard]] std::size_t entries_size(const hobject_t &hoid) const;
   std::tuple<UpdateMapType, RangeMapType> get_value_updates(const hobject_t &hoid);
   std::optional<ceph::buffer::list> get_updated_header(const hobject_t &hoid);
+  void append_delete(const hobject_t &hoid, const version_t version, const bool lost_delete);
+  void append_create(const hobject_t &hoid);
+  void append_whiteout(const hobject_t &hoid);
+  void trim_delete(const hobject_t &hoid, const version_t version);
+  std::pair<gen_t, bool> get_generation(const hobject_t &hoid);
 
   const_iterator begin_entries(const hobject_t &hoid);
   const_iterator end_entries(const hobject_t &hoid);

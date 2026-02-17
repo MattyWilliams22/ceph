@@ -1687,8 +1687,7 @@ bool PrimaryLogPG::get_rw_locks(bool write_ordered, OpContext *ctx)
    * to get the second.
    */
   if (write_ordered && ctx->op->may_read()) {
-    if (ctx->op->may_read_data() ||
-      (ctx->op->may_write() && pool.info.is_erasure())) {
+    if (ctx->op->may_read_data() || pool.info.is_erasure()) {
       ctx->lock_type = RWState::RWEXCL;
     } else {
       ctx->lock_type = RWState::RWWRITE;

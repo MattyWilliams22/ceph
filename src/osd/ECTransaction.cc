@@ -109,6 +109,9 @@ void ECTransaction::Generate::encode_and_write() {
       for (auto &&[offset, len]: to_write_eset) {
         buffer::list bl;
         to_write.get_buffer(shard, offset, len, bl);
+        ldpp_dout(dpp, 20) << __func__ << " writing to "
+                           << ghobject_t(oid, ghobject_t::NO_GEN, shard)
+                           << " offset=" << offset << " len=" << bl.length() << dendl;
         t.write(coll_t(spg_t(pgid, shard)),
                 ghobject_t(oid, ghobject_t::NO_GEN, shard),
                 offset, bl.length(), bl, fadvise_flags);
@@ -342,7 +345,7 @@ void ECTransaction::Generate::zero_truncate_to_delete() {
   }
 }
 
-void ECTransaction::Generate::delete_first() {
+void ECTransaction::Generate::delete_first(ECOmapJournal &ec_omap_journal) {
   /* We also want to remove the std::nullopt entries since
    * the keys already won't exist */
   for (auto j = op.attr_updates.begin();
@@ -361,9 +364,16 @@ void ECTransaction::Generate::delete_first() {
     obc->attr_cache.clear();
   }
   if (entry) {
+    ldpp_dout(dpp, 10) << __func__ << " delete_first for " << plan.hoid
+                       << " appending delete with version=" << entry->version.version
+                       << " lost_delete=" << entry->is_lost_delete() << dendl;
     entry->mod_desc.rmobject(entry->version.version);
+    ec_omap_journal.append_delete(plan.hoid, entry->version.version, entry->is_lost_delete());
     all_shards_written();
     for (auto &&[shard, t]: transactions) {
+      ldpp_dout(dpp, 10) << __func__ << " renaming object from "
+                         << ghobject_t(oid, ghobject_t::NO_GEN, shard)
+                         << " to " << ghobject_t(oid, entry->version.version, shard) << dendl;
       t.collection_move_rename(
         coll_t(spg_t(pgid, shard)),
         ghobject_t(oid, ghobject_t::NO_GEN, shard),
@@ -371,6 +381,9 @@ void ECTransaction::Generate::delete_first() {
         ghobject_t(oid, entry->version.version, shard));
     }
   } else {
+    ldpp_dout(dpp, 10) << __func__ << " removing object "
+                       << ghobject_t(oid, ghobject_t::NO_GEN, shard_id_t::NO_SHARD)
+                       << " (no entry)" << dendl;
     for (auto &&[shard, t]: transactions) {
       t.remove(
         coll_t(spg_t(pgid, shard)),
@@ -525,13 +538,18 @@ ECTransaction::Generate::Generate(PGTransaction &t,
   }
 
   if (op.delete_first) {
-    delete_first();
+    ldpp_dout(dpp, 10) << __func__ << " *** STEP 1: delete_first for " << oid << dendl;
+    delete_first(ec_omap_journal);
   }
 
   if (op.is_fresh_object() && entry) {
+    ldpp_dout(dpp, 10) << __func__ << " *** STEP 2: fresh object (create) for " << oid << dendl;
     entry->mod_desc.create();
+    ec_omap_journal.append_create(plan.hoid);
   }
 
+  ldpp_dout(dpp, 10) << __func__ << " *** STEP 3: process_init for " << oid
+                     << " is_rename=" << op.is_rename() << dendl;
   process_init();
 
   if (op.alloc_hint) {
@@ -571,16 +589,34 @@ ECTransaction::Generate::Generate(PGTransaction &t,
   // we want to update OI on all shards
   bool size_change = plan.orig_size != plan.projected_size;
   bool clear_whiteout = false;
+  bool create_whiteout = false;
 
-  // If we are updating the OI and we have a cache of the previous OI values
-  if (op.attr_updates.contains(OI_ATTR) && obc && obc->attr_cache.contains(OI_ATTR))
-  {
-    object_info_t oi_cache((obc->attr_cache[OI_ATTR]));
-    if (oi_cache.test_flag(object_info_t::FLAG_WHITEOUT))
-    {
-      object_info_t oi_updates(*(op.attr_updates[OI_ATTR]));
-      clear_whiteout = !oi_updates.test_flag(object_info_t::FLAG_WHITEOUT);
+  if (op.attr_updates.count(OI_ATTR)) {
+    // Decode the NEW Object Info to see if we are BECOMING a whiteout
+    // (Using standard decode pattern here)
+    bufferlist &bl = op.attr_updates.find(OI_ATTR)->second.value();
+    auto p = bl.cbegin();
+    object_info_t new_oi;
+    decode(new_oi, p);
+
+    if (new_oi.is_whiteout()) {
+      create_whiteout = true;
     }
+
+    // Existing logic for clear_whiteout (checking the OLD cached value)
+    if (obc && obc->attr_cache.count(OI_ATTR)) {
+      object_info_t oi_cache((obc->attr_cache[OI_ATTR]));
+      if (oi_cache.test_flag(object_info_t::FLAG_WHITEOUT))
+      {
+        object_info_t oi_updates(*(op.attr_updates[OI_ATTR]));
+        clear_whiteout = !oi_updates.test_flag(object_info_t::FLAG_WHITEOUT);
+      }
+    }
+  }
+
+  if (create_whiteout) {
+    ldpp_dout(dpp, 10) << __func__ << " detecting whiteout creation for " << oid << dendl;
+    ec_omap_journal.append_whiteout(plan.hoid);
   }
 
   if (size_change || clear_whiteout) {
@@ -606,6 +642,14 @@ ECTransaction::Generate::Generate(PGTransaction &t,
   }
 
   if (!op.omap_updates.empty() || op.clear_omap || op.omap_header) {
+    ldpp_dout(dpp, 10) << __func__ << " adding omap entry for " << plan.hoid
+                       << " version=" << entry->version
+                       << " clear_omap=" << op.clear_omap
+                       << " has_header=" << op.omap_header.has_value()
+                       << " num_updates=" << op.omap_updates.size() << dendl;
+    auto [gen, lost] = ec_omap_journal.get_generation(plan.hoid);
+    ldpp_dout(dpp, 10) << __func__ << " current generation from journal for " << plan.hoid
+                       << " is " << gen << " lost=" << lost << dendl;
     ECOmapJournalEntry new_entry(entry->version, op.clear_omap, op.omap_header, op.omap_updates);
     entry->mod_desc.ec_omap(
       op.clear_omap,

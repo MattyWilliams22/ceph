@@ -221,6 +221,12 @@ class ECBackend : public ECCommon {
     ceph::buffer::list *bl
   );
 
+  void _update_omap_ops_with_generation(
+    ObjectStore::Transaction &t,
+    ECOmapJournal &ec_omap_journal,
+    const char *func_name
+  );
+
 public:
   struct ECRecoveryBackend : RecoveryBackend {
     ECRecoveryBackend(CephContext *cct,
@@ -409,6 +415,8 @@ public:
   }
 
   bool remove_ec_omap_journal_entry(const hobject_t &hoid, const ECOmapJournalEntry &entry);
+  std::pair<gen_t, bool> get_generation(const hobject_t &hoid);
+  void trim_delete_from_journal(const hobject_t &hoid, const version_t version);
 
   using OmapIterFunction = std::function<ObjectStore::omap_iter_ret_t(std::string_view, std::string_view)>;
   int omap_iterate (

@@ -262,14 +262,10 @@ public:
                         uint32_t op_flags, ceph::buffer::list *bl, uint64_t object_size,
                         std::optional<CoroHandles> coro) override
   {
-    // If run without a coroutine, replicate old behaviour
-    if (!coro.has_value()) {
+    // Sync reads are only supported in FastEC, from within a coroutine
+    if (!is_optimized() || !coro.has_value()) {
       return -EOPNOTSUPP;
     }
-
-    // Sync reads are only supported in FastEC, from within a coroutine
-    ceph_assert(is_optimized());
-    ceph_assert(coro.has_value());
 
     ec_align_t align{off, len, op_flags};
     std::list<std::pair<ec_align_t, std::pair<bufferlist*, Context*>>> to_read;
@@ -459,6 +455,18 @@ public:
   bool remove_ec_omap_journal_entry(const hobject_t &hoid, const ECOmapJournalEntry &entry) override {
     ceph_assert(is_optimized());
     return optimized.remove_ec_omap_journal_entry(hoid, entry);
+  }
+
+  std::pair<gen_t, bool> get_generation(const hobject_t &hoid) override
+  {
+    ceph_assert(is_optimized());
+    return optimized.get_generation(hoid);
+  }
+
+  void trim_delete_from_journal(const hobject_t &hoid, const version_t version) override
+  {
+    ceph_assert(is_optimized());
+    optimized.trim_delete_from_journal(hoid, version);
   }
 
   int omap_iterate (

@@ -129,6 +129,7 @@ void ECOmapJournal::clear(const hobject_t &hoid) {
   key_map.erase(hoid);
   removed_ranges_map.erase(hoid);
   header_map.erase(hoid);
+  object_state_map.erase(hoid);
 }
 
 void ECOmapJournal::clear_all() {
@@ -136,6 +137,7 @@ void ECOmapJournal::clear_all() {
   key_map.clear();
   removed_ranges_map.clear();
   header_map.clear();
+  object_state_map.clear();
 }
 
 std::size_t ECOmapJournal::entries_size(const hobject_t &hoid) const {
@@ -462,4 +464,61 @@ ECOmapJournal::RangeMapType ECOmapJournal::get_removed_ranges(const hobject_t &h
     }
   }
   return merged_ranges;
+}
+
+void ECOmapJournal::append_delete(
+  const hobject_t &hoid,
+  const version_t version,
+  const bool lost_delete)
+{
+  entries.erase(hoid);
+  key_map.erase(hoid);
+  removed_ranges_map.erase(hoid);
+  header_map.erase(hoid);
+  if (const auto it = object_state_map.find(hoid); it != object_state_map.end()) {
+    it->second.insert({version, lost_delete});
+  } else {
+    object_state_map.insert({hoid, {{version, lost_delete}}});
+  }
+}
+
+void ECOmapJournal::append_create(const hobject_t &hoid)
+{
+  entries.erase(hoid);
+  key_map.erase(hoid);
+  removed_ranges_map.erase(hoid);
+  header_map.erase(hoid);
+}
+
+void ECOmapJournal::append_whiteout(const hobject_t &hoid)
+{
+  entries.erase(hoid);
+  key_map.erase(hoid);
+  removed_ranges_map.erase(hoid);
+  header_map.erase(hoid);
+}
+
+void ECOmapJournal::trim_delete(const hobject_t &hoid, const version_t version)
+{
+  if (const auto it = object_state_map.find(hoid); it != object_state_map.end()) {
+    std::map<version_t,bool>& versions = it->second;
+    if (const auto it2 = versions.find(version); it2 != versions.end()) {
+      versions.erase(it2);
+    }
+    if (versions.empty()) {
+      object_state_map.erase(it);
+    }
+  }
+}
+
+std::pair<gen_t, bool> ECOmapJournal::get_generation(const hobject_t &hoid)
+{
+  if (const auto it = object_state_map.find(hoid); it != object_state_map.end()) {
+    if (const auto& versions = it->second; !versions.empty()) {
+      gen_t gen = versions.begin()->first;
+      bool lost = versions.begin()->second;
+      return {gen, lost};
+    }
+  }
+  return {static_cast<gen_t>(ghobject_t::NO_GEN), false};
 }

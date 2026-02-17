@@ -774,6 +774,93 @@ TEST_P(OmapTest, LargeOmapRecovery) {
   turn_balancing_on();
 }
 
+TEST_P(OmapTest, OmapAfterDelete) {
+  SKIP_IF_CRIMSON();
+  const std::string oid = "test_omap_after_delete";
+  const std::string omap_header = "my_omap_header";
+  bufferlist omap_header_bl;
+  encode(omap_header, omap_header_bl);
+  
+  auto omap_map = get_test_omap_data();
+  
+  // 1. Create object with omap data
+  create_test_object_with_omap(oid, omap_map, omap_header_bl);
+  
+  // 2. Verify omap data exists
+  int err = 0;
+  std::set<std::string> returned_keys;
+  ObjectReadOperation read1;
+  read1.omap_get_keys2("", LONG_MAX, &returned_keys, nullptr, &err);
+  int ret = ioctx.operate(oid, &read1, nullptr);
+  EXPECT_EQ(ret, 0);
+  ASSERT_EQ(0, err);
+  ASSERT_EQ(6u, returned_keys.size());
+  
+  // 3. Delete the object
+  ret = ioctx.remove(oid);
+  EXPECT_EQ(ret, 0);
+  
+  // 4. Try to read omap keys - should fail with -ENOENT
+  err = 0;
+  returned_keys.clear();
+  ObjectReadOperation read2;
+  read2.omap_get_keys2("", LONG_MAX, &returned_keys, nullptr, &err);
+  ret = ioctx.operate(oid, &read2, nullptr);
+  EXPECT_EQ(ret, -ENOENT);
+  EXPECT_EQ(err, -EIO);
+  
+  // 5. Try to read omap values - should fail with -ENOENT
+  err = 0;
+  std::map<std::string, bufferlist> returned_vals;
+  ObjectReadOperation read3;
+  read3.omap_get_vals2("", LONG_MAX, &returned_vals, nullptr, &err);
+  ret = ioctx.operate(oid, &read3, nullptr);
+  EXPECT_EQ(ret, -ENOENT);
+  EXPECT_EQ(err, -EIO);
+  
+  // 6. Try to read omap header - should fail with -ENOENT
+  err = 0;
+  bufferlist returned_header_bl;
+  ObjectReadOperation read4;
+  read4.omap_get_header(&returned_header_bl, &err);
+  ret = ioctx.operate(oid, &read4, nullptr);
+  EXPECT_EQ(ret, -ENOENT);
+  EXPECT_EQ(err, 0);
+  
+  // 7. Try to read omap values by keys - should fail with -ENOENT
+  err = 0;
+  std::set<std::string> key_filter = { "omap_key_1_palomino", "omap_key_3_bay" };
+  std::map<std::string, bufferlist> returned_vals_by_keys;
+  ObjectReadOperation read5;
+  read5.omap_get_vals_by_keys(key_filter, &returned_vals_by_keys, &err);
+  ret = ioctx.operate(oid, &read5, nullptr);
+  EXPECT_EQ(ret, -ENOENT);
+  EXPECT_EQ(err, -EIO);
+  
+  // 8. Try to write omap data to deleted object - should succeed (creates new object)
+  bufferlist new_omap_val_bl;
+  const std::string new_omap_value = "new_value";
+  encode(new_omap_value, new_omap_val_bl);
+  std::map<std::string, bufferlist> new_omap_map = {
+    {"new_key", new_omap_val_bl}
+  };
+  ObjectWriteOperation write_op;
+  write_op.omap_set(new_omap_map);
+  ret = ioctx.operate(oid, &write_op);
+  EXPECT_EQ(ret, 0);
+  
+  // 9. Verify new omap data exists (object was recreated)
+  err = 0;
+  returned_keys.clear();
+  ObjectReadOperation read6;
+  read6.omap_get_keys2("", LONG_MAX, &returned_keys, nullptr, &err);
+  ret = ioctx.operate(oid, &read6, nullptr);
+  EXPECT_EQ(ret, 0);
+  ASSERT_EQ(0, err);
+  ASSERT_EQ(1u, returned_keys.size());
+  ASSERT_EQ(1u, returned_keys.count("new_key"));
+}
+
 // Instantiate tests for both pool types
 INSTANTIATE_TEST_SUITE_P(, OmapTest,
   ::testing::Values(

@@ -458,6 +458,10 @@ typedef std::shared_ptr<const OSDMap> OSDMapRef;
    virtual bool remove_ec_omap_journal_entry(const hobject_t &hoid, const ECOmapJournalEntry &entry) {
      return false; // Only EC uses ec_omap_journal
    };
+   virtual std::pair<gen_t, bool> get_generation(const hobject_t &hoid) {
+     return {0, false}; // Only EC uses ec_omap_journal
+   };
+   virtual void trim_delete_from_journal(const hobject_t &hoid, const version_t version) {};
    using OmapIterFunction = std::function<ObjectStore::omap_iter_ret_t(std::string_view, std::string_view)>;
    virtual int omap_iterate(
      ObjectStore::CollectionHandle &c_, ///< [in] collection

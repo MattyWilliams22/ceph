@@ -383,6 +383,45 @@ void ECBackend::sub_write_committed(
   }
 }
 
+// Helper function to update OMAP operations with generation numbers
+void ECBackend::_update_omap_ops_with_generation(
+  ObjectStore::Transaction &t,
+  ECOmapJournal &ec_omap_journal,
+  const char *func_name)
+{
+  ObjectStore::Transaction::iterator i = t.begin();
+  while (i.have_op()) {
+    ObjectStore::Transaction::Op *txn_op = i.decode_op();
+    
+    // Check if this is an OMAP operation
+    if (txn_op->op == ObjectStore::Transaction::OP_OMAP_CLEAR ||
+        txn_op->op == ObjectStore::Transaction::OP_OMAP_SETKEYS ||
+        txn_op->op == ObjectStore::Transaction::OP_OMAP_RMKEYS ||
+        txn_op->op == ObjectStore::Transaction::OP_OMAP_SETHEADER ||
+        txn_op->op == ObjectStore::Transaction::OP_OMAP_RMKEYRANGE) {
+      
+      // Get the object from the transaction iterator
+      const ghobject_t& oid = i.get_oid(txn_op->oid);
+      
+      // Extract the hobject_t from ghobject_t
+      hobject_t hoid(oid.hobj);
+      
+      // Get the generation number from the journal
+      auto [gen, lost] = ec_omap_journal.get_generation(hoid);
+      
+      dout(20) << func_name << " modifying OMAP op " << txn_op->op
+               << " for object " << hoid
+               << " to include generation " << gen << dendl;
+      
+      // Create a new ghobject_t with the generation number
+      ghobject_t new_oid(hoid, gen, oid.shard_id);
+      
+      // Update the object_index in the transaction to use the new oid
+      i.objects[txn_op->oid] = new_oid;
+    }
+  }
+}
+
 void ECBackend::handle_sub_write(
   pg_shard_t from,
   OpRequestRef msg,
@@ -400,6 +439,10 @@ void ECBackend::handle_sub_write(
   }
   if (!get_parent()->pgb_is_primary())
     get_parent()->update_stats(op.stats);
+  
+  // Update OMAP operations in op.t to include generation number
+  // _update_omap_ops_with_generation(op.t, ec_omap_journal, __func__);
+  
   ObjectStore::Transaction localt;
   if (!op.temp_added.empty()) {
     switcher->add_temp_objs(op.temp_added);
@@ -421,6 +464,21 @@ void ECBackend::handle_sub_write(
   switcher->clear_temp_objs(op.temp_removed);
   dout(30) << __func__ << " missing before " <<
     get_parent()->get_log().get_missing().get_items() << dendl;
+  
+  // Update EC omap journal on non-primary shards from log entries
+  // This ensures the journal has the correct generation info when transactions are applied
+  if (!get_parent()->pgb_is_primary()) {
+    for (auto &&e: op.log_entries) {
+      if (e.is_delete() || e.is_lost_delete()) {
+        // Track deletes in the journal so we know the generation number
+        ec_omap_journal.append_delete(e.soid, e.version.version, e.is_lost_delete());
+        dout(20) << __func__ << " non-primary shard updating journal: delete "
+                 << e.soid << " version=" << e.version.version
+                 << " lost_delete=" << e.is_lost_delete() << dendl;
+      }
+    }
+  }
+  
   // flag set to true during async recovery
   bool async = false;
   pg_missing_tracker_t pmissing = get_parent()->get_local_missing();
@@ -447,6 +505,9 @@ void ECBackend::handle_sub_write(
   if (!get_parent()->pg_is_undersized() &&
     get_parent()->whoami_shard().shard >= sinfo.get_k())
     op.t.set_fadvise_flag(CEPH_OSD_OP_FLAG_FADVISE_DONTNEED);
+
+  // Update OMAP operations in localt to include generation number
+  // _update_omap_ops_with_generation(localt, ec_omap_journal, __func__);
 
   localt.register_on_commit(
     get_parent()->bless_context(
@@ -1543,6 +1604,16 @@ int ECBackend::be_deep_scrub(
 
 bool ECBackend::remove_ec_omap_journal_entry(const hobject_t &hoid, const ECOmapJournalEntry &entry) {
   return ec_omap_journal.remove_entry(hoid, entry);
+}
+
+std::pair<gen_t, bool> ECBackend::get_generation(const hobject_t& hoid)
+{
+  return ec_omap_journal.get_generation(hoid);
+}
+
+void ECBackend::trim_delete_from_journal(const hobject_t &hoid, const version_t version)
+{
+  return ec_omap_journal.trim_delete(hoid, version);
 }
 
 int ECBackend::omap_iterate (
