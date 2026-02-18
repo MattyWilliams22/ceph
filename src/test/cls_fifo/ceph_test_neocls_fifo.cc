@@ -46,13 +46,13 @@ namespace fifo = rados::cls::fifo;
 class FIFOtest {
 public:
   template<typename... Args>
-  static auto create_meta(neorados::RADOS rados, Args&&... args) {
+  static auto create_meta(neorados::RADOS& rados, Args&&... args) {
     return detail::FIFOImpl::create_meta(rados,
 					 std::forward<Args>(args)...);
   }
 
   template<typename... Args>
-  static auto get_meta(neorados::RADOS rados, Args&&... args) {
+  static auto get_meta(neorados::RADOS& rados, Args&&... args) {
     return FIFO::get_meta(rados, std::forward<Args>(args)...);
   }
 
@@ -144,12 +144,13 @@ CORO_TEST_P(TestNeoClsFifo, cls_fifo_get_info)
 {
   auto r = rados();
   std::string_view fifo_id = "fifo";
+  sys::error_code ec;
 
   co_await FIFOtest::create_meta(r, fifo_id, pool(), std::nullopt,
                                  std::nullopt, false,
                                  FIFO::default_max_part_size,
                                  FIFO::default_max_entry_size,
-                                 asio::use_awaitable);
+                                 asio::redirect_error(asio::use_awaitable, ec));
   auto [info, part_header_size, part_entry_overhead] =
     co_await FIFOtest::get_meta(r, fifo_id, pool(), std::nullopt,
                                 asio::use_awaitable);

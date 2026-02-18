@@ -360,14 +360,14 @@ public:
   /// in a way appropriate to the completion token.
   template<boost::asio::completion_token_for<
     void(boost::system::error_code, rados::cls::fifo::info,
-	 uint32_t, uint32_t)> CompletionToken>
-  static auto get_meta(neorados::RADOS rados, Object obj, IOContext ioc,
-		       std::optional<rados::cls::fifo::objv> objv,
-		       CompletionToken&& token) {
+  uint32_t, uint32_t)> CompletionToken>
+  static auto get_meta(neorados::RADOS& rados, Object obj, IOContext ioc,
+         std::optional<rados::cls::fifo::objv> objv,
+         CompletionToken&& token) {
 
     return detail::FIFOImpl::get_meta(rados, std::move(obj), std::move(ioc),
-				      std::move(objv),
-				      std::forward<CompletionToken>(token));
+  		      std::move(objv),
+  		      std::forward<CompletionToken>(token));
   }
 };
 } // namespace neorados::cls::fifo {
