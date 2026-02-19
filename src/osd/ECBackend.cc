@@ -421,6 +421,21 @@ void ECBackend::handle_sub_write(
   switcher->clear_temp_objs(op.temp_removed);
   dout(30) << __func__ << " missing before " <<
     get_parent()->get_log().get_missing().get_items() << dendl;
+  
+  // Update EC omap journal on non-primary shards from log entries
+  // This ensures the journal has the correct generation info when transactions are applied
+  if (!get_parent()->pgb_is_primary()) {
+    for (auto &&e: op.log_entries) {
+      if (e.is_delete() || e.is_lost_delete()) {
+        // Track deletes in the journal so we know the generation number
+        ec_omap_journal.append_delete(e.soid, e.version.version, e.is_lost_delete());
+        dout(20) << __func__ << " non-primary shard updating journal: delete "
+                 << e.soid << " version=" << e.version.version
+                 << " lost_delete=" << e.is_lost_delete() << dendl;
+      }
+    }
+  }
+  
   // flag set to true during async recovery
   bool async = false;
   pg_missing_tracker_t pmissing = get_parent()->get_local_missing();
@@ -1490,6 +1505,16 @@ int ECBackend::be_deep_scrub(
 
 bool ECBackend::remove_ec_omap_journal_entry(const hobject_t &hoid, const ECOmapJournalEntry &entry) {
   return ec_omap_journal.remove_entry(hoid, entry);
+}
+
+std::pair<gen_t, bool> ECBackend::get_generation(const hobject_t& hoid)
+{
+  return ec_omap_journal.get_generation(hoid);
+}
+
+void ECBackend::trim_delete_from_journal(const hobject_t &hoid, const version_t version)
+{
+  return ec_omap_journal.trim_delete(hoid, version);
 }
 
 int ECBackend::omap_iterate (

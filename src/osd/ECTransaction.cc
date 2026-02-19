@@ -342,7 +342,7 @@ void ECTransaction::Generate::zero_truncate_to_delete() {
   }
 }
 
-void ECTransaction::Generate::delete_first() {
+void ECTransaction::Generate::delete_first(ECOmapJournal &ec_omap_journal) {
   /* We also want to remove the std::nullopt entries since
    * the keys already won't exist */
   for (auto j = op.attr_updates.begin();
@@ -362,6 +362,7 @@ void ECTransaction::Generate::delete_first() {
   }
   if (entry) {
     entry->mod_desc.rmobject(entry->version.version);
+    ec_omap_journal.append_delete(plan.hoid, entry->version.version, entry->is_lost_delete());
     all_shards_written();
     for (auto &&[shard, t]: transactions) {
       t.collection_move_rename(
@@ -525,11 +526,12 @@ ECTransaction::Generate::Generate(PGTransaction &t,
   }
 
   if (op.delete_first) {
-    delete_first();
+    delete_first(ec_omap_journal);
   }
 
   if (op.is_fresh_object() && entry) {
     entry->mod_desc.create();
+    ec_omap_journal.append_create(plan.hoid);
   }
 
   process_init();
@@ -571,16 +573,34 @@ ECTransaction::Generate::Generate(PGTransaction &t,
   // we want to update OI on all shards
   bool size_change = plan.orig_size != plan.projected_size;
   bool clear_whiteout = false;
+  bool create_whiteout = false;
 
-  // If we are updating the OI and we have a cache of the previous OI values
-  if (op.attr_updates.contains(OI_ATTR) && obc && obc->attr_cache.contains(OI_ATTR))
-  {
-    object_info_t oi_cache((obc->attr_cache[OI_ATTR]));
-    if (oi_cache.test_flag(object_info_t::FLAG_WHITEOUT))
-    {
-      object_info_t oi_updates(*(op.attr_updates[OI_ATTR]));
-      clear_whiteout = !oi_updates.test_flag(object_info_t::FLAG_WHITEOUT);
+  if (op.attr_updates.count(OI_ATTR)) {
+    // Decode the NEW Object Info to see if we are BECOMING a whiteout
+    // (Using standard decode pattern here)
+    bufferlist &bl = op.attr_updates.find(OI_ATTR)->second.value();
+    auto p = bl.cbegin();
+    object_info_t new_oi;
+    decode(new_oi, p);
+
+    if (new_oi.is_whiteout()) {
+      create_whiteout = true;
     }
+
+    // Existing logic for clear_whiteout (checking the OLD cached value)
+    if (obc && obc->attr_cache.contains(OI_ATTR)) {
+      object_info_t oi_cache((obc->attr_cache[OI_ATTR]));
+      if (oi_cache.test_flag(object_info_t::FLAG_WHITEOUT))
+      {
+        object_info_t oi_updates(*(op.attr_updates[OI_ATTR]));
+        clear_whiteout = !oi_updates.test_flag(object_info_t::FLAG_WHITEOUT);
+      }
+    }
+  }
+
+  if (create_whiteout) {
+    ldpp_dout(dpp, 10) << __func__ << " detecting whiteout creation for " << oid << dendl;
+    ec_omap_journal.append_whiteout(plan.hoid);
   }
 
   if (size_change || clear_whiteout) {

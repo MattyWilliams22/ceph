@@ -4,7 +4,7 @@
 /*
  * Ceph - scalable distributed file system
  *
- * Copyright (C) 2016 Red Hat
+ * Copyright (C) 2026 IBM
  *
  * This is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -510,4 +510,722 @@ TEST(ecomapjournal, ClearOmap) {
   ASSERT_EQ(1u, ranges.size());
   EXPECT_TRUE(ranges.contains(""));
   EXPECT_TRUE(ranges.at("") == std::nullopt);
+}
+
+TEST(ecomapjournal, append_delete_clears_maps)
+{
+  ECOmapJournal journal;
+  const hobject_t test_hoid("test_delete", CEPH_NOSNAP, 1, 0, "test_namespace");
+  
+  // Add some journal entries
+  ECOmapJournalEntry entry1(eversion_t(1, 1), false, std::nullopt, {});
+  ECOmapJournalEntry entry2(eversion_t(1, 2), false, std::nullopt, {});
+  journal.add_entry(test_hoid, entry1);
+  journal.add_entry(test_hoid, entry2);
+  
+  ASSERT_EQ(2u, journal.entries_size(test_hoid));
+  
+  // Delete the object
+  journal.append_delete(test_hoid, 5, false);
+  
+  // All entries should be cleared
+  ASSERT_EQ(0u, journal.entries_size(test_hoid));
+}
+
+TEST(ecomapjournal, append_delete_adds_to_object_state_map)
+{
+  ECOmapJournal journal;
+  const hobject_t test_hoid("test_delete2", CEPH_NOSNAP, 1, 0, "test_namespace");
+  
+  // Delete the object at version 5
+  journal.append_delete(test_hoid, 5, false);
+  
+  // Generation should be the delete version
+  auto [gen, lost] = journal.get_generation(test_hoid);
+  ASSERT_EQ(5u, gen);
+  ASSERT_FALSE(lost);
+}
+
+TEST(ecomapjournal, append_delete_multiple_versions)
+{
+  ECOmapJournal journal;
+  const hobject_t test_hoid("test_delete3", CEPH_NOSNAP, 1, 0, "test_namespace");
+  
+  // Delete the object at multiple versions
+  journal.append_delete(test_hoid, 5, false);
+  journal.append_delete(test_hoid, 8, false);
+  journal.append_delete(test_hoid, 3, false);
+  
+  // Generation should be the lowest delete version
+  auto [gen, lost] = journal.get_generation(test_hoid);
+  ASSERT_EQ(3u, gen);
+  ASSERT_FALSE(lost);
+}
+
+TEST(ecomapjournal, append_create_clears_entries)
+{
+  ECOmapJournal journal;
+  const hobject_t test_hoid("test_create", CEPH_NOSNAP, 1, 0, "test_namespace");
+  
+  // Add some journal entries
+  ECOmapJournalEntry entry1(eversion_t(1, 1), false, std::nullopt, {});
+  ECOmapJournalEntry entry2(eversion_t(1, 2), false, std::nullopt, {});
+  journal.add_entry(test_hoid, entry1);
+  journal.add_entry(test_hoid, entry2);
+  
+  ASSERT_EQ(2u, journal.entries_size(test_hoid));
+  
+  // Create the object
+  journal.append_create(test_hoid);
+  
+  // All entries should be cleared
+  ASSERT_EQ(0u, journal.entries_size(test_hoid));
+}
+
+TEST(ecomapjournal, trim_delete_removes_version)
+{
+  ECOmapJournal journal;
+  const hobject_t test_hoid("test_trim_delete", CEPH_NOSNAP, 1, 0, "test_namespace");
+  
+  // Delete the object at multiple versions
+  journal.append_delete(test_hoid, 5, false);
+  journal.append_delete(test_hoid, 8, false);
+  journal.append_delete(test_hoid, 3, false);
+  
+  auto [gen1, lost1] = journal.get_generation(test_hoid);
+  ASSERT_EQ(3u, gen1);
+  ASSERT_FALSE(lost1);
+  
+  // Trim the lowest version
+  journal.trim_delete(test_hoid, 3);
+  
+  // Generation should now be the next lowest version
+  auto [gen2, lost2] = journal.get_generation(test_hoid);
+  ASSERT_EQ(5u, gen2);
+  ASSERT_FALSE(lost2);
+}
+
+TEST(ecomapjournal, trim_delete_last_version)
+{
+  ECOmapJournal journal;
+  const hobject_t test_hoid("test_trim_last", CEPH_NOSNAP, 1, 0, "test_namespace");
+  
+  // Delete the object at one version
+  journal.append_delete(test_hoid, 5, false);
+  
+  // Trim the only version
+  journal.trim_delete(test_hoid, 5);
+  
+  // Generation should be NO_GEN
+  auto [gen, lost] = journal.get_generation(test_hoid);
+  ASSERT_EQ(UINT64_MAX, gen);
+  ASSERT_FALSE(lost);
+}
+
+TEST(ecomapjournal, get_generation_no_deletes)
+{
+  ECOmapJournal journal;
+  const hobject_t test_hoid("test_no_delete", CEPH_NOSNAP, 1, 0, "test_namespace");
+  
+  // Generation should be NO_GEN
+  auto [gen, lost] = journal.get_generation(test_hoid);
+  ASSERT_EQ(UINT64_MAX, gen);
+  ASSERT_FALSE(lost);
+}
+
+TEST(ecomapjournal, append_delete_with_lost_flag)
+{
+  ECOmapJournal journal;
+  const hobject_t test_hoid("test_lost", CEPH_NOSNAP, 1, 0, "test_namespace");
+  
+  // Delete with lost_delete = true
+  journal.append_delete(test_hoid, 5, true);
+  auto [gen1, lost1] = journal.get_generation(test_hoid);
+  ASSERT_EQ(5u, gen1);
+  ASSERT_TRUE(lost1);
+  
+  // Delete with lost_delete = false
+  journal.append_delete(test_hoid, 8, false);
+  auto [gen2, lost2] = journal.get_generation(test_hoid);
+  ASSERT_EQ(5u, gen2);
+  ASSERT_TRUE(lost2);
+}
+
+TEST(ecomapjournal, delete_then_create_workflow)
+{
+  ECOmapJournal journal;
+  const hobject_t test_hoid("test_delete_create", CEPH_NOSNAP, 1, 0, "test_namespace");
+  
+  // Add entries
+  journal.add_entry(test_hoid, create_insert_entry(eversion_t(1, 1), 1, 10));
+  ASSERT_EQ(1u, journal.entries_size(test_hoid));
+  
+  // Delete object
+  journal.append_delete(test_hoid, 5, false);
+  ASSERT_EQ(0u, journal.entries_size(test_hoid));
+  
+  // Add more entries after delete
+  journal.add_entry(test_hoid, create_insert_entry(eversion_t(1, 6), 20, 30));
+  ASSERT_EQ(1u, journal.entries_size(test_hoid));
+  
+  // Create object (simulating recreation)
+  journal.append_create(test_hoid);
+  ASSERT_EQ(0u, journal.entries_size(test_hoid));
+  
+  // Object should still have the delete version tracked
+  auto [gen, lost] = journal.get_generation(test_hoid);
+  ASSERT_EQ(5u, gen);
+  ASSERT_FALSE(lost);
+}
+
+TEST(ecomapjournal, multiple_objects_state_tracking)
+{
+  ECOmapJournal journal;
+  const hobject_t hoid1("obj1", CEPH_NOSNAP, 1, 0, "ns");
+  const hobject_t hoid2("obj2", CEPH_NOSNAP, 1, 0, "ns");
+  const hobject_t hoid3("obj3", CEPH_NOSNAP, 1, 0, "ns");
+  
+  // Delete different objects at different versions
+  journal.append_delete(hoid1, 10, false);
+  journal.append_delete(hoid2, 5, false);
+  journal.append_delete(hoid3, 15, false);
+  
+  auto [gen1, lost1] = journal.get_generation(hoid1);
+  ASSERT_EQ(10u, gen1);
+  ASSERT_FALSE(lost1);
+  auto [gen2, lost2] = journal.get_generation(hoid2);
+  ASSERT_EQ(5u, gen2);
+  ASSERT_FALSE(lost2);
+  auto [gen3, lost3] = journal.get_generation(hoid3);
+  ASSERT_EQ(15u, gen3);
+  ASSERT_FALSE(lost3);
+  
+  // Trim one object's delete
+  journal.trim_delete(hoid2, 5);
+  
+  // Only hoid2 should have NO_GEN
+  auto [gen1b, lost1b] = journal.get_generation(hoid1);
+  ASSERT_EQ(10u, gen1b);
+  ASSERT_FALSE(lost1b);
+  auto [gen2b, lost2b] = journal.get_generation(hoid2);
+  ASSERT_EQ(UINT64_MAX, gen2b);
+  ASSERT_FALSE(lost2b);
+  auto [gen3b, lost3b] = journal.get_generation(hoid3);
+  ASSERT_EQ(15u, gen3b);
+  ASSERT_FALSE(lost3b);
+}
+
+TEST(ecomapjournal, append_delete_clears_processed_entries)
+{
+  ECOmapJournal journal;
+  const hobject_t test_hoid("test_processed", CEPH_NOSNAP, 1, 0, "test_namespace");
+  
+  // Add entries and process them
+  journal.add_entry(test_hoid, create_insert_entry(eversion_t(1, 1), 1, 10));
+  auto [updates, ranges] = journal.get_value_updates(test_hoid);
+  
+  // Verify entries were processed (entries_size should be 0 after processing)
+  ASSERT_EQ(0u, journal.entries_size(test_hoid));
+  ASSERT_FALSE(updates.empty());
+  
+  // Delete the object - should clear processed entries too
+  journal.append_delete(test_hoid, 5, false);
+  
+  // Get updates again - should be empty
+  auto [updates2, ranges2] = journal.get_value_updates(test_hoid);
+  ASSERT_TRUE(updates2.empty());
+  ASSERT_TRUE(ranges2.empty());
+}
+
+TEST(ecomapjournal, generation_with_whiteout)
+{
+  ECOmapJournal journal;
+  const hobject_t test_hoid("test_whiteout", CEPH_NOSNAP, 1, 0, "test_namespace");
+  
+  // Simulate whiteout by deleting
+  journal.append_delete(test_hoid, 10, false);
+  
+  auto [gen1, lost1] = journal.get_generation(test_hoid);
+  ASSERT_EQ(10u, gen1);
+  ASSERT_FALSE(lost1);
+  
+  // Add another delete (could represent another whiteout)
+  journal.append_delete(test_hoid, 12, false);
+  
+  // Generation should still be the lowest
+  auto [gen2, lost2] = journal.get_generation(test_hoid);
+  ASSERT_EQ(10u, gen2);
+  ASSERT_FALSE(lost2);
+}
+
+TEST(ecomapjournal, append_whiteout_clears_entries)
+{
+  ECOmapJournal journal;
+  const hobject_t test_hoid("test_whiteout_entries", CEPH_NOSNAP, 1, 0, "test_namespace");
+  
+  // Add some journal entries
+  ECOmapJournalEntry entry1(eversion_t(1, 1), false, std::nullopt, {});
+  ECOmapJournalEntry entry2(eversion_t(1, 2), false, std::nullopt, {});
+  journal.add_entry(test_hoid, entry1);
+  journal.add_entry(test_hoid, entry2);
+  
+  ASSERT_EQ(2u, journal.entries_size(test_hoid));
+  
+  // Whiteout the object
+  journal.append_whiteout(test_hoid);
+  
+  // All entries should be cleared
+  ASSERT_EQ(0u, journal.entries_size(test_hoid));
+}
+
+TEST(ecomapjournal, append_whiteout_clears_processed_entries)
+{
+  ECOmapJournal journal;
+  const hobject_t test_hoid("test_whiteout_processed", CEPH_NOSNAP, 1, 0, "test_namespace");
+  
+  // Add entries and process them
+  journal.add_entry(test_hoid, create_insert_entry(eversion_t(1, 1), 1, 10));
+  auto [updates, ranges] = journal.get_value_updates(test_hoid);
+  
+  // Verify entries were processed
+  ASSERT_EQ(0u, journal.entries_size(test_hoid));
+  ASSERT_FALSE(updates.empty());
+  
+  // Whiteout the object - should clear processed entries too
+  journal.append_whiteout(test_hoid);
+  
+  // Get updates again - should be empty
+  auto [updates2, ranges2] = journal.get_value_updates(test_hoid);
+  ASSERT_TRUE(updates2.empty());
+  ASSERT_TRUE(ranges2.empty());
+}
+
+TEST(ecomapjournal, append_whiteout_clears_header)
+{
+  ECOmapJournal journal;
+  const hobject_t test_hoid("test_whiteout_header", CEPH_NOSNAP, 1, 0, "test_namespace");
+  
+  const std::string omap_header_str = "test header";
+  ceph::buffer::list omap_header_bl;
+  encode(omap_header_str, omap_header_bl);
+  
+  ECOmapJournalEntry entry1(eversion_t(1, 1), false, omap_header_bl, {});
+  journal.add_entry(test_hoid, entry1);
+  
+  // Verify header exists
+  std::optional<ceph::buffer::list> header = journal.get_updated_header(test_hoid);
+  ASSERT_TRUE(header.has_value());
+  
+  // Whiteout the object
+  journal.append_whiteout(test_hoid);
+  
+  // Header should be cleared
+  std::optional<ceph::buffer::list> header2 = journal.get_updated_header(test_hoid);
+  ASSERT_FALSE(header2.has_value());
+}
+
+TEST(ecomapjournal, append_whiteout_on_nonexistent_object)
+{
+  ECOmapJournal journal;
+  const hobject_t test_hoid("test_whiteout_nonexist", CEPH_NOSNAP, 1, 0, "test_namespace");
+  
+  // Whiteout on non-existent object should not crash
+  journal.append_whiteout(test_hoid);
+  
+  // Should still be empty
+  ASSERT_EQ(0u, journal.entries_size(test_hoid));
+}
+
+TEST(ecomapjournal, append_whiteout_followed_by_new_entries)
+{
+  ECOmapJournal journal;
+  const hobject_t test_hoid("test_whiteout_new", CEPH_NOSNAP, 1, 0, "test_namespace");
+  
+  // Add entries
+  journal.add_entry(test_hoid, create_insert_entry(eversion_t(1, 1), 1, 10));
+  ASSERT_EQ(1u, journal.entries_size(test_hoid));
+  
+  // Whiteout
+  journal.append_whiteout(test_hoid);
+  ASSERT_EQ(0u, journal.entries_size(test_hoid));
+  
+  // Add new entries after whiteout
+  journal.add_entry(test_hoid, create_insert_entry(eversion_t(1, 2), 20, 30));
+  ASSERT_EQ(1u, journal.entries_size(test_hoid));
+  
+  // New entries should be present
+  auto [updates, ranges] = journal.get_value_updates(test_hoid);
+  ASSERT_FALSE(updates.empty());
+  ASSERT_TRUE(updates.contains(make_key(20)));
+}
+
+TEST(ecomapjournal, append_whiteout_does_not_affect_generation)
+{
+  ECOmapJournal journal;
+  const hobject_t test_hoid("test_whiteout_gen", CEPH_NOSNAP, 1, 0, "test_namespace");
+  
+  // Delete object to set generation
+  journal.append_delete(test_hoid, 5, false);
+  auto [gen1, lost1] = journal.get_generation(test_hoid);
+  ASSERT_EQ(5u, gen1);
+  
+  // Add entries
+  journal.add_entry(test_hoid, create_insert_entry(eversion_t(1, 6), 1, 10));
+  
+  // Whiteout should clear entries but not generation
+  journal.append_whiteout(test_hoid);
+  
+  auto [gen2, lost2] = journal.get_generation(test_hoid);
+  ASSERT_EQ(5u, gen2);
+  ASSERT_FALSE(lost2);
+}
+
+TEST(ecomapjournal, whiteout_create_delete_workflow)
+{
+  ECOmapJournal journal;
+  const hobject_t test_hoid("test_whiteout_workflow", CEPH_NOSNAP, 1, 0, "test_namespace");
+  
+  // Add entries
+  journal.add_entry(test_hoid, create_insert_entry(eversion_t(1, 1), 1, 10));
+  ASSERT_EQ(1u, journal.entries_size(test_hoid));
+  
+  // Whiteout
+  journal.append_whiteout(test_hoid);
+  ASSERT_EQ(0u, journal.entries_size(test_hoid));
+  
+  // Create
+  journal.append_create(test_hoid);
+  ASSERT_EQ(0u, journal.entries_size(test_hoid));
+  
+  // Add more entries
+  journal.add_entry(test_hoid, create_insert_entry(eversion_t(1, 2), 20, 30));
+  ASSERT_EQ(1u, journal.entries_size(test_hoid));
+  
+  // Delete
+  journal.append_delete(test_hoid, 10, false);
+  ASSERT_EQ(0u, journal.entries_size(test_hoid));
+  
+  auto [gen, lost] = journal.get_generation(test_hoid);
+  ASSERT_EQ(10u, gen);
+}
+
+TEST(ecomapvalue, update_value_with_data)
+{
+  eversion_t v1(1, 1);
+  ceph::buffer::list bl1;
+  bl1.append("value1");
+  
+  ECOmapValue value(v1, bl1);
+  ASSERT_EQ(v1, value.version);
+  ASSERT_TRUE(value.value.has_value());
+  
+  eversion_t v2(1, 2);
+  ceph::buffer::list bl2;
+  bl2.append("value2");
+  
+  value.update_value(v2, bl2);
+  ASSERT_EQ(v2, value.version);
+  ASSERT_TRUE(value.value.has_value());
+  ASSERT_EQ(bl2, *value.value);
+}
+
+TEST(ecomapvalue, update_value_to_nullopt)
+{
+  eversion_t v1(1, 1);
+  ceph::buffer::list bl1;
+  bl1.append("value1");
+  
+  ECOmapValue value(v1, bl1);
+  ASSERT_TRUE(value.value.has_value());
+  
+  eversion_t v2(1, 2);
+  value.update_value(v2, std::nullopt);
+  
+  ASSERT_EQ(v2, value.version);
+  ASSERT_FALSE(value.value.has_value());
+}
+
+TEST(ecomapvalue, multiple_updates)
+{
+  eversion_t v1(1, 1);
+  ECOmapValue value(v1, std::nullopt);
+  
+  for (int i = 2; i <= 5; ++i) {
+    eversion_t v(1, i);
+    ceph::buffer::list bl;
+    bl.append(std::to_string(i));
+    value.update_value(v, bl);
+    ASSERT_EQ(v, value.version);
+  }
+  
+  ASSERT_EQ(eversion_t(1, 5), value.version);
+}
+
+TEST(ecomapremovedranges, add_range_non_overlapping)
+{
+  ECOmapRemovedRanges ranges(eversion_t(1, 1));
+  
+  ranges.add_range("key_010", "key_020");
+  ranges.add_range("key_030", "key_040");
+  
+  ASSERT_EQ(2u, ranges.ranges.size());
+}
+
+TEST(ecomapremovedranges, add_range_overlapping)
+{
+  ECOmapRemovedRanges ranges(eversion_t(1, 1));
+  
+  ranges.add_range("key_010", "key_030");
+  ranges.add_range("key_020", "key_040");
+  
+  // Should merge into single range
+  ASSERT_EQ(1u, ranges.ranges.size());
+  EXPECT_EQ("key_010", ranges.ranges.front().first);
+  EXPECT_EQ("key_040", *ranges.ranges.front().second);
+}
+
+TEST(ecomapremovedranges, add_range_adjacent)
+{
+  ECOmapRemovedRanges ranges(eversion_t(1, 1));
+  
+  ranges.add_range("key_010", "key_020");
+  ranges.add_range("key_020", "key_030");
+  
+  // Should merge into single range
+  ASSERT_EQ(1u, ranges.ranges.size());
+  EXPECT_EQ("key_010", ranges.ranges.front().first);
+  EXPECT_EQ("key_030", *ranges.ranges.front().second);
+}
+
+TEST(ecomapremovedranges, add_range_with_nullopt_end)
+{
+  ECOmapRemovedRanges ranges(eversion_t(1, 1));
+  
+  ranges.add_range("key_010", "key_020");
+  ranges.add_range("key_015", std::nullopt);
+  
+  // Should merge and extend to end
+  ASSERT_EQ(1u, ranges.ranges.size());
+  EXPECT_EQ("key_010", ranges.ranges.front().first);
+  EXPECT_FALSE(ranges.ranges.front().second.has_value());
+}
+
+TEST(ecomapremovedranges, clear_omap_test)
+{
+  ECOmapRemovedRanges ranges(eversion_t(1, 1));
+  
+  ranges.add_range("key_010", "key_020");
+  ranges.add_range("key_030", "key_040");
+  ASSERT_EQ(2u, ranges.ranges.size());
+  
+  ranges.clear_omap();
+  
+  // Should replace all ranges with single range from "" to nullopt
+  ASSERT_EQ(1u, ranges.ranges.size());
+  EXPECT_EQ("", ranges.ranges.front().first);
+  EXPECT_FALSE(ranges.ranges.front().second.has_value());
+}
+
+TEST(ecomapheader, update_header_with_data)
+{
+  eversion_t v1(1, 1);
+  ceph::buffer::list bl1;
+  bl1.append("header1");
+  
+  ECOmapHeader header(v1, bl1);
+  ASSERT_EQ(v1, header.version);
+  ASSERT_TRUE(header.header.has_value());
+  
+  eversion_t v2(1, 2);
+  ceph::buffer::list bl2;
+  bl2.append("header2");
+  
+  header.update_header(v2, bl2);
+  ASSERT_EQ(v2, header.version);
+  ASSERT_TRUE(header.header.has_value());
+  ASSERT_EQ(bl2, *header.header);
+}
+
+TEST(ecomapheader, update_header_to_nullopt)
+{
+  eversion_t v1(1, 1);
+  ceph::buffer::list bl1;
+  bl1.append("header1");
+  
+  ECOmapHeader header(v1, bl1);
+  ASSERT_TRUE(header.header.has_value());
+  
+  eversion_t v2(1, 2);
+  header.update_header(v2, std::nullopt);
+  
+  ASSERT_EQ(v2, header.version);
+  ASSERT_FALSE(header.header.has_value());
+}
+
+TEST(ecomapheader, default_constructor)
+{
+  ECOmapHeader header;
+  ASSERT_EQ(eversion_t(), header.version);
+  ASSERT_FALSE(header.header.has_value());
+}
+
+TEST(ecomapjournal, remove_entry_on_empty_journal)
+{
+  ECOmapJournal journal;
+  const hobject_t test_hoid("test_empty", CEPH_NOSNAP, 1, 0, "test_namespace");
+  
+  ECOmapJournalEntry entry(eversion_t(1, 1), false, std::nullopt, {});
+  bool res = journal.remove_entry(test_hoid, entry);
+  
+  ASSERT_FALSE(res);
+}
+
+TEST(ecomapjournal, remove_entry_by_version_on_empty_journal)
+{
+  ECOmapJournal journal;
+  const hobject_t test_hoid("test_empty2", CEPH_NOSNAP, 1, 0, "test_namespace");
+  
+  bool res = journal.remove_entry_by_version(test_hoid, eversion_t(1, 1));
+  
+  ASSERT_FALSE(res);
+}
+
+TEST(ecomapjournal, get_value_updates_after_clear)
+{
+  ECOmapJournal journal;
+  const hobject_t test_hoid("test_clear_updates", CEPH_NOSNAP, 1, 0, "test_namespace");
+  
+  journal.add_entry(test_hoid, create_insert_entry(eversion_t(1, 1), 1, 10));
+  journal.clear(test_hoid);
+  
+  auto [updates, ranges] = journal.get_value_updates(test_hoid);
+  ASSERT_TRUE(updates.empty());
+  ASSERT_TRUE(ranges.empty());
+}
+
+TEST(ecomapjournal, get_updated_header_after_clear)
+{
+  ECOmapJournal journal;
+  const hobject_t test_hoid("test_clear_header", CEPH_NOSNAP, 1, 0, "test_namespace");
+  
+  ceph::buffer::list header_bl;
+  header_bl.append("header");
+  ECOmapJournalEntry entry(eversion_t(1, 1), false, header_bl, {});
+  journal.add_entry(test_hoid, entry);
+  
+  journal.clear(test_hoid);
+  
+  std::optional<ceph::buffer::list> header = journal.get_updated_header(test_hoid);
+  ASSERT_FALSE(header.has_value());
+}
+
+TEST(ecomapjournal, entries_with_empty_omap_updates)
+{
+  ECOmapJournal journal;
+  const hobject_t test_hoid("test_empty_updates", CEPH_NOSNAP, 1, 0, "test_namespace");
+  
+  ECOmapJournalEntry entry(eversion_t(1, 1), false, std::nullopt, {});
+  journal.add_entry(test_hoid, entry);
+  
+  auto [updates, ranges] = journal.get_value_updates(test_hoid);
+  ASSERT_TRUE(updates.empty());
+  ASSERT_TRUE(ranges.empty());
+}
+
+TEST(ecomapjournal, trim_delete_nonexistent_version)
+{
+  ECOmapJournal journal;
+  const hobject_t test_hoid("test_trim_nonexist", CEPH_NOSNAP, 1, 0, "test_namespace");
+  
+  journal.append_delete(test_hoid, 5, false);
+  
+  // Trim non-existent version should not crash
+  journal.trim_delete(test_hoid, 10);
+  
+  auto [gen, lost] = journal.get_generation(test_hoid);
+  ASSERT_EQ(5u, gen);
+}
+
+TEST(ecomapjournal, get_generation_after_clear_all)
+{
+  ECOmapJournal journal;
+  const hobject_t test_hoid("test_gen_clear_all", CEPH_NOSNAP, 1, 0, "test_namespace");
+  
+  journal.append_delete(test_hoid, 5, false);
+  journal.clear_all();
+  
+  auto [gen, lost] = journal.get_generation(test_hoid);
+  ASSERT_EQ(UINT64_MAX, gen);
+  ASSERT_FALSE(lost);
+}
+
+TEST(ecomapjournal, multiple_objects_interleaved_operations)
+{
+  ECOmapJournal journal;
+  const hobject_t hoid1("obj1", CEPH_NOSNAP, 1, 0, "ns");
+  const hobject_t hoid2("obj2", CEPH_NOSNAP, 1, 0, "ns");
+  const hobject_t hoid3("obj3", CEPH_NOSNAP, 1, 0, "ns");
+  
+  // Interleave operations on multiple objects
+  journal.add_entry(hoid1, create_insert_entry(eversion_t(1, 1), 1, 10));
+  journal.add_entry(hoid2, create_insert_entry(eversion_t(1, 1), 20, 30));
+  journal.append_delete(hoid3, 5, false);
+  journal.add_entry(hoid1, create_insert_entry(eversion_t(1, 2), 11, 20));
+  journal.append_whiteout(hoid2);
+  
+  // Verify each object's state
+  ASSERT_EQ(2u, journal.entries_size(hoid1));
+  ASSERT_EQ(0u, journal.entries_size(hoid2));
+  ASSERT_EQ(0u, journal.entries_size(hoid3));
+  
+  auto [gen3, lost3] = journal.get_generation(hoid3);
+  ASSERT_EQ(5u, gen3);
+}
+
+TEST(ecomapjournal, iterator_over_empty_entries)
+{
+  ECOmapJournal journal;
+  const hobject_t test_hoid("test_iter_empty", CEPH_NOSNAP, 1, 0, "test_namespace");
+  
+  auto begin = journal.begin_entries(test_hoid);
+  auto end = journal.end_entries(test_hoid);
+  
+  ASSERT_EQ(begin, end);
+}
+
+TEST(ecomapjournal, iterator_over_single_entry)
+{
+  ECOmapJournal journal;
+  const hobject_t test_hoid("test_iter_single", CEPH_NOSNAP, 1, 0, "test_namespace");
+  
+  ECOmapJournalEntry entry(eversion_t(1, 1), false, std::nullopt, {});
+  journal.add_entry(test_hoid, entry);
+  
+  auto begin = journal.begin_entries(test_hoid);
+  auto end = journal.end_entries(test_hoid);
+  
+  ASSERT_NE(begin, end);
+  ASSERT_EQ(entry.version, begin->version);
+  ASSERT_EQ(end, ++begin);
+}
+
+TEST(ecomapjournal, iterator_over_multiple_entries)
+{
+  ECOmapJournal journal;
+  const hobject_t test_hoid("test_iter_multiple", CEPH_NOSNAP, 1, 0, "test_namespace");
+  
+  ECOmapJournalEntry entry1(eversion_t(1, 1), false, std::nullopt, {});
+  ECOmapJournalEntry entry2(eversion_t(1, 2), false, std::nullopt, {});
+  ECOmapJournalEntry entry3(eversion_t(1, 3), false, std::nullopt, {});
+  
+  journal.add_entry(test_hoid, entry1);
+  journal.add_entry(test_hoid, entry2);
+  journal.add_entry(test_hoid, entry3);
+  
+  int count = 0;
+  for (auto it = journal.begin_entries(test_hoid); it != journal.end_entries(test_hoid); ++it) {
+    count++;
+  }
+  
+  ASSERT_EQ(3, count);
 }

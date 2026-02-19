@@ -101,7 +101,7 @@ class Generate {
   void all_shards_written();
   void shard_written(const shard_id_t shard);
   void shards_written(const shard_id_set &shards);
-  void delete_first();
+  void delete_first(ECOmapJournal &ec_omap_journal);
   void zero_truncate_to_delete();
   void process_init();
   void encode_and_write();
