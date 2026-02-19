@@ -383,45 +383,6 @@ void ECBackend::sub_write_committed(
   }
 }
 
-// Helper function to update OMAP operations with generation numbers
-void ECBackend::_update_omap_ops_with_generation(
-  ObjectStore::Transaction &t,
-  ECOmapJournal &ec_omap_journal,
-  const char *func_name)
-{
-  ObjectStore::Transaction::iterator i = t.begin();
-  while (i.have_op()) {
-    ObjectStore::Transaction::Op *txn_op = i.decode_op();
-    
-    // Check if this is an OMAP operation
-    if (txn_op->op == ObjectStore::Transaction::OP_OMAP_CLEAR ||
-        txn_op->op == ObjectStore::Transaction::OP_OMAP_SETKEYS ||
-        txn_op->op == ObjectStore::Transaction::OP_OMAP_RMKEYS ||
-        txn_op->op == ObjectStore::Transaction::OP_OMAP_SETHEADER ||
-        txn_op->op == ObjectStore::Transaction::OP_OMAP_RMKEYRANGE) {
-      
-      // Get the object from the transaction iterator
-      const ghobject_t& oid = i.get_oid(txn_op->oid);
-      
-      // Extract the hobject_t from ghobject_t
-      hobject_t hoid(oid.hobj);
-      
-      // Get the generation number from the journal
-      auto [gen, lost] = ec_omap_journal.get_generation(hoid);
-      
-      dout(20) << func_name << " modifying OMAP op " << txn_op->op
-               << " for object " << hoid
-               << " to include generation " << gen << dendl;
-      
-      // Create a new ghobject_t with the generation number
-      ghobject_t new_oid(hoid, gen, oid.shard_id);
-      
-      // Update the object_index in the transaction to use the new oid
-      i.objects[txn_op->oid] = new_oid;
-    }
-  }
-}
-
 void ECBackend::handle_sub_write(
   pg_shard_t from,
   OpRequestRef msg,
@@ -439,10 +400,6 @@ void ECBackend::handle_sub_write(
   }
   if (!get_parent()->pgb_is_primary())
     get_parent()->update_stats(op.stats);
-  
-  // Update OMAP operations in op.t to include generation number
-  // _update_omap_ops_with_generation(op.t, ec_omap_journal, __func__);
-  
   ObjectStore::Transaction localt;
   if (!op.temp_added.empty()) {
     switcher->add_temp_objs(op.temp_added);
@@ -505,9 +462,6 @@ void ECBackend::handle_sub_write(
   if (!get_parent()->pg_is_undersized() &&
     get_parent()->whoami_shard().shard >= sinfo.get_k())
     op.t.set_fadvise_flag(CEPH_OSD_OP_FLAG_FADVISE_DONTNEED);
-
-  // Update OMAP operations in localt to include generation number
-  // _update_omap_ops_with_generation(localt, ec_omap_journal, __func__);
 
   localt.register_on_commit(
     get_parent()->bless_context(

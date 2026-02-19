@@ -221,12 +221,6 @@ class ECBackend : public ECCommon {
     ceph::buffer::list *bl
   );
 
-  void _update_omap_ops_with_generation(
-    ObjectStore::Transaction &t,
-    ECOmapJournal &ec_omap_journal,
-    const char *func_name
-  );
-
 public:
   struct ECRecoveryBackend : RecoveryBackend {
     ECRecoveryBackend(CephContext *cct,
