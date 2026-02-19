@@ -43,7 +43,7 @@ void ECOmapRemovedRanges::add_range(const std::string& start, const std::optiona
       continue;
     }
     // Current range is to the right of new range
-    if (!new_end || *new_end < it->first) {
+    if (new_end && *new_end < it->first) {
       ranges.insert(it, {new_start, new_end});
       inserted = true;
       break;
