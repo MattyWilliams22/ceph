@@ -442,6 +442,18 @@ public:
     return optimized.remove_ec_omap_journal_entry(hoid, entry);
   }
 
+  std::pair<gen_t, bool> get_generation(const hobject_t &hoid) override
+  {
+    ceph_assert(is_optimized());
+    return optimized.get_generation(hoid);
+  }
+
+  void trim_delete_from_journal(const hobject_t &hoid, const version_t version) override
+  {
+    ceph_assert(is_optimized());
+    optimized.trim_delete_from_journal(hoid, version);
+  }
+
   int omap_iterate (
     ObjectStore::CollectionHandle &c_, ///< [in] collection
     const ghobject_t &oid, ///< [in] object

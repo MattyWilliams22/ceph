@@ -142,9 +142,9 @@ add_executable(ceph_test_rados_api_snapshots_stats_pp
 target_link_libraries(ceph_test_rados_api_snapshots_stats_pp
   librados ${UNITTEST_LIBS} radostest-cxx)
 
-add_executable(ceph_test_rados_api_ec_omap_pp
-        ec_omap_cxx.cc)
-target_link_libraries(ceph_test_rados_api_ec_omap_pp
+add_executable(ceph_test_rados_api_omap_pp
+        omap_cxx.cc)
+target_link_libraries(ceph_test_rados_api_omap_pp
         librados ${UNITTEST_LIBS} radostest-cxx json_structures)
 
 install(TARGETS
@@ -171,7 +171,7 @@ install(TARGETS
   ceph_test_rados_api_stat_pp
   ceph_test_rados_api_watch_notify
   ceph_test_rados_api_watch_notify_pp
-  ceph_test_rados_api_ec_omap_pp
+  ceph_test_rados_api_omap_pp
   DESTINATION ${CMAKE_INSTALL_BINDIR})
 
 # unittest_librados
