@@ -582,10 +582,11 @@ void ECBackend::handle_sub_read(
       continue;
     }
     bufferlist bl;
-    int r = switcher->store->omap_get_header(
+    int r = omap_get_header(
       switcher->ch,
       ghobject_t(*i, ghobject_t::NO_GEN, shard),
-      &reply->omap_headers_read[*i], false);
+      &reply->omap_headers_read[*i], false,
+      switcher->store);
     if (r < 0) {
       // If we read error, we should not return the omap header too.
       reply->omap_headers_read.erase(*i);
@@ -606,7 +607,7 @@ void ECBackend::handle_sub_read(
     reply->omaps_complete[hoid] = false;
 
     uint64_t available = max_bytes;
-    const auto result = switcher->store->omap_iterate(
+    const auto result = omap_iterate(
       switcher->ch,
       ghobject_t(hoid, ghobject_t::NO_GEN, shard),
       ObjectStore::omap_iter_seek_t{
@@ -615,7 +616,7 @@ void ECBackend::handle_sub_read(
       },
       [max_entries=cct->_conf->osd_recovery_max_omap_entries_per_chunk, &available, &current_batch]
       (const std::string_view key, const std::string_view value) {
-        const auto num_new_bytes = key.size() + value.size(); 
+        const auto num_new_bytes = key.size() + value.size();
         if (auto cur_num_entries = current_batch.size(); cur_num_entries > 0) {
 	  if (max_entries > 0 && cur_num_entries >= max_entries) {
             return ObjectStore::omap_iter_ret_t::STOP;
@@ -629,7 +630,7 @@ void ECBackend::handle_sub_read(
         current_batch.insert(make_pair(key, val_bl));
         available -= std::min(available, num_new_bytes);
         return ObjectStore::omap_iter_ret_t::NEXT;
-      });
+      }, switcher->store);
 
     if (result < 0) {
       reply->errors[hoid] = result;
@@ -964,6 +965,7 @@ void ECBackend::check_recovery_sources(const OSDMapRef &osdmap) {
 }
 
 void ECBackend::on_change() {
+  ec_omap_journal.clear_all();
   rmw_pipeline.on_change();
   read_pipeline.on_change();
   rmw_pipeline.on_change2();
@@ -1022,7 +1024,8 @@ struct ECClassicalOp : ECCommon::RMWPipeline::Op {
       &temp_added,
       &temp_cleared,
       dpp,
-      osdmap);
+      osdmap,
+      pipeline->ec_backend.ec_omap_journal);
   }
 
   bool skip_transaction(
@@ -1506,7 +1509,7 @@ int ECBackend::omap_iterate (
 
   auto wrapper = [&](const std::string_view store_key, const std::string_view store_value) {
     bool found_store_key_in_journal = false;
-    
+
     while (journal_it != update_map.end() && journal_it->first <= store_key) {
       if (journal_it->first == store_key) {
         found_store_key_in_journal = true;
@@ -1562,7 +1565,7 @@ int ECBackend::omap_get_values(
   ObjectStore *store
 ) {
   auto [update_map, removed_ranges] = ec_omap_journal.get_value_updates(oid.hobj);
-  
+
   set<string> keys_still_to_get;
   for (auto &key : keys) {
     if (auto it = update_map.find(key);
@@ -1671,7 +1674,7 @@ int ECBackend::omap_check_keys(
 
 bool ECBackend::should_be_removed(
   const std::map<std::string, std::optional<std::string>>& removed_ranges,
-  std::string_view key) 
+  std::string_view key)
 {
   // Find range that comes after this key
   auto it = removed_ranges.upper_bound(std::string(key));

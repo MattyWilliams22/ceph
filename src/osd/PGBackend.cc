@@ -379,7 +379,7 @@ struct Trimmer : public ObjectModDesc::Visitor {
     }
   }
 
-  void ec_omap(bool clear_omap, std::optional<ceph::buffer::list> omap_header, 
+  void ec_omap(bool clear_omap, std::optional<ceph::buffer::list> omap_header,
     std::vector<std::pair<OmapUpdateType, ceph::buffer::list>> &omap_updates) override {
 
     auto shard = pg->get_parent()->whoami_shard().shard;
@@ -424,7 +424,7 @@ struct Trimmer : public ObjectModDesc::Visitor {
       }
     }
 
-    ECOmapJournalEntry to_remove(
+    const ECOmapJournalEntry to_remove(
       entry.version, clear_omap,
       omap_header, omap_updates
       );
