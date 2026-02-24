@@ -1507,12 +1507,12 @@ bool ECBackend::remove_ec_omap_journal_entry(const hobject_t &hoid, const ECOmap
   return ec_omap_journal.remove_entry(hoid, entry);
 }
 
-std::pair<gen_t, bool> ECBackend::get_generation(const hobject_t& hoid)
+std::pair<gen_t, bool> ECBackend::omap_get_generation(const hobject_t& hoid)
 {
   return ec_omap_journal.get_generation(hoid);
 }
 
-void ECBackend::trim_delete_from_journal(const hobject_t &hoid, const version_t version)
+void ECBackend::omap_trim_delete_from_journal(const hobject_t &hoid, const version_t version)
 {
   return ec_omap_journal.trim_delete(hoid, version);
 }
@@ -1520,7 +1520,8 @@ void ECBackend::trim_delete_from_journal(const hobject_t &hoid, const version_t 
 int ECBackend::omap_iterate (
   ObjectStore::CollectionHandle &c_, ///< [in] collection
   const ghobject_t &oid, ///< [in] object
-  const ObjectStore::omap_iter_seek_t &start_from, ///< [in] where the iterator should point to at the beginning
+  const ObjectStore::omap_iter_seek_t &start_from,
+  ///^ [in] where the iterator should point to at the beginning
   const OmapIterFunction &f, ///< [in] function to call for each key/value pair
   ObjectStore *store
 ) {
@@ -1540,7 +1541,13 @@ int ECBackend::omap_iterate (
         found_store_key_in_journal = true;
       }
       if (journal_it->second.value.has_value()) {
-        ObjectStore::omap_iter_ret_t r = f(journal_it->first, std::string_view(journal_it->second.value->c_str(), journal_it->second.value->length()));
+        ObjectStore::omap_iter_ret_t r = f(
+          journal_it->first,
+          std::string_view(
+            journal_it->second.value->c_str(),
+            journal_it->second.value->length()
+          )
+        );
         if (r == ObjectStore::omap_iter_ret_t::STOP) {
           return r;
         }
@@ -1562,10 +1569,8 @@ int ECBackend::omap_iterate (
   if (const auto result = store->omap_iterate(c_, oid, start_from, wrapper);
     result < 0) {
     return result;
-    }
-  else if (const auto stop = static_cast<bool>(result);
-      stop) {
-      return 1;
+  } else if (const auto stop = static_cast<bool>(result); stop) {
+    return 1;
   }
 
   auto ret = ObjectStore::omap_iter_ret_t::NEXT;
@@ -1701,16 +1706,21 @@ bool ECBackend::should_be_removed(
   const std::map<std::string, std::optional<std::string>>& removed_ranges,
   std::string_view key)
 {
+  if (removed_ranges.empty()) {
+    return false;
+  }
+  
   // Find range that comes after this key
   auto it = removed_ranges.upper_bound(std::string(key));
 
-  // If there are no ranges, return false
+  // If all ranges start after the key, it can't be in any range
   if (it == removed_ranges.begin()) {
     return false;
   }
 
   // Go back to the previous range
   --it;
+
   // If this range contains the key, return true
   const auto& end_opt = it->second;
   if (!end_opt || key < *end_opt) {

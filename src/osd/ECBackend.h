@@ -399,8 +399,8 @@ public:
   }
 
   bool remove_ec_omap_journal_entry(const hobject_t &hoid, const ECOmapJournalEntry &entry);
-  std::pair<gen_t, bool> get_generation(const hobject_t &hoid);
-  void trim_delete_from_journal(const hobject_t &hoid, const version_t version);
+  std::pair<gen_t, bool> omap_get_generation(const hobject_t &hoid);
+  void omap_trim_delete_from_journal(const hobject_t &hoid, const version_t version);
 
   using OmapIterFunction = std::function<ObjectStore::omap_iter_ret_t(std::string_view, std::string_view)>;
   int omap_iterate (
