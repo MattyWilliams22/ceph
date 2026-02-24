@@ -6504,8 +6504,7 @@ bool OSDMonitor::preprocess_command(MonOpRequestRef op)
 			 p->has_flag(pg_pool_t::FLAG_EC_OPTIMIZATIONS));
 	    break;
 	  case SUPPORTS_OMAP:
-	    f->dump_bool("supports_omap",
-                         p->has_flag(pg_pool_t::FLAG_OMAP));
+	    f->dump_bool("supports_omap", p->supports_omap());
 	    break;
 	  }
       }
@@ -6685,7 +6684,7 @@ bool OSDMonitor::preprocess_command(MonOpRequestRef op)
 	    break;
 	  case SUPPORTS_OMAP:
 	    ss << "supports_omap: " <<
-              (p->has_flag(pg_pool_t::FLAG_OMAP) ? "true" : "false") <<
+              (p->supports_omap() ? "true" : "false") <<
               "\n";
 	    break;
 	}
@@ -8281,7 +8280,9 @@ int OSDMonitor::prepare_new_pool(string& name,
   if (crimson) {
     pi->set_flag(pg_pool_t::FLAG_CRIMSON);
   }
-  if (pool_type == pg_pool_t::TYPE_REPLICATED) {
+  // Change tentacle to umbrella once it is available
+  if (pool_type == pg_pool_t::TYPE_REPLICATED
+    && osdmap.require_osd_release >= ceph_release_t::tentacle) {
     pi->set_flag(pg_pool_t::FLAG_OMAP);
   }
 
