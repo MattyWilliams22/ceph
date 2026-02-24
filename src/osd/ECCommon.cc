@@ -706,7 +706,10 @@ void ECCommon::ReadPipeline::objects_read_and_reconstruct(
       get_want_to_read_shards(to_read, want_shard_reads);
     }
 
-    read_request_t read_request(to_read, want_shard_reads, false, false, false, "", 0, object_size);
+    read_request_t read_request(
+      to_read, want_shard_reads, WantAttrs::No, WantOmapHeader::No,
+      WantOmapKeys::No, "", 0, object_size
+    );
     const int r = get_min_avail_to_read_shards(
       hoid,
       false,
@@ -804,14 +807,14 @@ bool ECCommon::shard_read_t::operator==(const shard_read_t &other) const {
 
 bool ECCommon::read_request_t::operator==(const read_request_t &other) const {
   return to_read == other.to_read &&
-    flags == other.flags &&
-      shard_want_to_read == other.shard_want_to_read &&
-        shard_reads == other.shard_reads &&
-          want_attrs == other.want_attrs &&
-            want_omap_header == other.want_omap_header &&
-              want_omap_keys == other.want_omap_keys &&
-                omap_read_from == other.omap_read_from &&
-                  omap_max_bytes == other.omap_max_bytes;
+         flags == other.flags &&
+         shard_want_to_read == other.shard_want_to_read &&
+         shard_reads == other.shard_reads &&
+         want_attrs == other.want_attrs &&
+         want_omap_header == other.want_omap_header &&
+         want_omap_keys == other.want_omap_keys &&
+         omap_read_from == other.omap_read_from &&
+         omap_max_bytes == other.omap_max_bytes;
 }
 
 void ECCommon::RMWPipeline::start_rmw(OpRef op) {
@@ -1487,15 +1490,26 @@ void ECCommon::RecoveryBackend::continue_recovery_op(
         op.xattrs = op.obc->attr_cache;
       }
 
-      read_request_t read_request(std::move(want),
-                                  op.recovery_progress.first && !op.obc,
-                                  op.recovery_progress.first && !op.recovery_progress.omap_complete,
-                                  !op.recovery_progress.omap_complete,
-                                  op.recovery_progress.omap_recovered_to,
-                                  available,
-                                  op.obc
-                                    ? op.obc->obs.oi.size
-                                    : get_recovery_chunk_size());
+      const auto want_attrs = (op.recovery_progress.first && !op.obc)
+                                ? WantAttrs::Yes
+                                : WantAttrs::No;
+      const auto want_omap_header = (op.recovery_progress.first && !op.recovery_progress.omap_complete)
+                                      ? WantOmapHeader::Yes
+                                      : WantOmapHeader::No;
+      const auto want_omap_keys = (!op.recovery_progress.omap_complete)
+                                    ? WantOmapKeys::Yes
+                                    : WantOmapKeys::No;
+      const auto chunk_size = op.obc ? op.obc->obs.oi.size : get_recovery_chunk_size();
+
+      read_request_t read_request(
+        std::move(want),
+        want_attrs,
+        want_omap_header,
+        want_omap_keys,
+        op.recovery_progress.omap_recovered_to,
+        available,
+        chunk_size
+      );
 
       int r = read_pipeline.get_min_avail_to_read_shards(
         op.hoid, true, false, read_request);
@@ -1514,7 +1528,7 @@ void ECCommon::RecoveryBackend::continue_recovery_op(
       shard_id_map<pg_shard_t> pg_shards(sinfo.get_k_plus_m());
       read_pipeline.get_all_avail_shards(op.hoid, have, pg_shards, true, {});
       bool found_omap_shard = false;
-      for (auto shard : have) {
+      for (const auto shard : have) {
         if (!sinfo.is_nonprimary_shard(shard)) {
           shard_read_t shard_read;
           shard_read.pg_shard = pg_shards[shard];

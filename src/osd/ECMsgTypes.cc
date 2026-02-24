@@ -350,8 +350,9 @@ void ECSubReadReply::encode(bufferlist &p_bl,
 			    bufferlist &d_bl,
 			    uint64_t features) const
 {
-  uint8_t ver = HAVE_FEATURE(features, SERVER_TENTACLE) ? 2 : 1;
-  ENCODE_START(3, ver, p_bl);
+  uint8_t ver = HAVE_FEATURE(features, SERVER_TENTACLE) ? 3 : 1;
+  uint8_t compat_ver = HAVE_FEATURE(features, SERVER_TENTACLE) ? 2 : 1;
+  ENCODE_START(ver, compat_ver, p_bl);
   encode(from, p_bl);
   encode(tid, p_bl);
   if (ver >= 2) {
