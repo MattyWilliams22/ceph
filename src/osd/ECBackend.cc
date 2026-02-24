@@ -596,7 +596,6 @@ void ECBackend::handle_sub_read(
     if (reply->errors.contains(*i)) {
       continue;
     }
-    bufferlist bl;
     int r = omap_get_header(
       switcher->ch,
       ghobject_t(*i, ghobject_t::NO_GEN, shard),
@@ -630,8 +629,8 @@ void ECBackend::handle_sub_read(
       .seek_type = ObjectStore::omap_iter_seek_t::UPPER_BOUND
       },
       [max_entries=cct->_conf->osd_recovery_max_omap_entries_per_chunk, &available, &current_batch]
-      (const std::string_view key, const std::string_view value) {
-        const auto num_new_bytes = key.size() + value.size(); 
+      (std::string_view key, std::string_view value) {
+        const auto num_new_bytes = key.size() + value.size();
         if (auto cur_num_entries = current_batch.size(); cur_num_entries > 0) {
 	  if (max_entries > 0 && cur_num_entries >= max_entries) {
             return ObjectStore::omap_iter_ret_t::STOP;
@@ -650,7 +649,7 @@ void ECBackend::handle_sub_read(
     if (result < 0) {
       reply->errors[hoid] = result;
       current_batch.clear();
-    } else if (const auto more = static_cast<bool>(result); !more) {
+    } else if (result == 0) {
       reply->omaps_complete[hoid] = true;
     }
     reply->omap_entries_read[hoid] = std::move(current_batch);
@@ -771,7 +770,7 @@ void ECBackend::handle_sub_read_reply(
     }
   }
   for (auto &&[hoid, attr]: op.attrs_read) {
-    ceph_assert(!op.errors.count(hoid));
+    ceph_assert(!op.errors.contains(hoid));
     // if read error better not have sent an attribute
     if (!rop.to_read.contains(hoid)) {
       // We canceled this read! @see filter_read_op
@@ -785,7 +784,7 @@ void ECBackend::handle_sub_read_reply(
     (*(rop.complete.at(hoid).attrs)).swap(attr);
   }
   for (auto &&[hoid, header]: op.omap_headers_read) {
-    ceph_assert(!op.errors.count(hoid));
+    ceph_assert(!op.errors.contains(hoid));
     // if read error better not have sent an attribute
     if (!rop.to_read.contains(hoid)) {
       // We canceled this read! @see filter_read_op
@@ -799,7 +798,7 @@ void ECBackend::handle_sub_read_reply(
     (*(rop.complete.at(hoid).omap_header)).swap(header);
   }
   for (auto &&[hoid, entries]: op.omap_entries_read) {
-    ceph_assert(!op.errors.count(hoid));
+    ceph_assert(!op.errors.contains(hoid));
     // if read error better not have sent any entries
     if (!rop.to_read.contains(hoid)) {
       // We canceled this read! @see filter_read_op
@@ -813,7 +812,7 @@ void ECBackend::handle_sub_read_reply(
     (*(rop.complete.at(hoid).omap_entries)).swap(entries);
   }
   for (auto &&[hoid, omap_complete]: op.omaps_complete) {
-    ceph_assert(!op.errors.count(hoid));
+    ceph_assert(!op.errors.contains(hoid));
     // if read error better not have sent any entries
     if (!rop.to_read.contains(hoid)) {
       // We canceled this read! @see filter_read_op
@@ -1537,7 +1536,7 @@ int ECBackend::omap_iterate (
 
   auto wrapper = [&](const std::string_view store_key, const std::string_view store_value) {
     bool found_store_key_in_journal = false;
-    
+
     while (journal_it != update_map.end() && journal_it->first <= store_key) {
       if (journal_it->first == store_key) {
         found_store_key_in_journal = true;
@@ -1597,7 +1596,7 @@ int ECBackend::omap_get_values(
   ObjectStore *store
 ) {
   auto [update_map, removed_ranges] = ec_omap_journal.get_value_updates(oid.hobj);
-  
+
   set<string> keys_still_to_get;
   for (auto &key : keys) {
     if (auto it = update_map.find(key);
@@ -1706,7 +1705,7 @@ int ECBackend::omap_check_keys(
 
 bool ECBackend::should_be_removed(
   const std::map<std::string, std::optional<std::string>>& removed_ranges,
-  std::string_view key) 
+  std::string_view key)
 {
   if (removed_ranges.empty()) {
     return false;
