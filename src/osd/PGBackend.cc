@@ -353,7 +353,7 @@ struct Trimmer : public ObjectModDesc::Visitor {
       old_version,
       t);
 
-    pg->trim_delete_from_journal(soid, old_version);
+    pg->omap_trim_delete_from_journal(soid, old_version);
   }
   // try_rmobject defaults to rmobject
   void rollback_extents(
@@ -387,7 +387,7 @@ struct Trimmer : public ObjectModDesc::Visitor {
     auto shard = pg->get_parent()->whoami_shard().shard;
     spg_t spg = pg->get_parent()->whoami_spg_t();
     auto sinfo = pg->ec_get_sinfo();
-    const auto [gen, lost_delete] = pg->get_generation(soid);
+    const auto [gen, lost_delete] = pg->omap_get_generation(soid);
 
     if (!sinfo.is_nonprimary_shard(shard)) {
       // If lost_delete is true, check if the object exists before performing updates
