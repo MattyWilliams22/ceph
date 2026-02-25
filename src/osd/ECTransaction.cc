@@ -626,6 +626,7 @@ ECTransaction::Generate::Generate(PGTransaction &t,
   }
 
   if (!op.omap_updates.empty() || op.clear_omap || op.omap_header) {
+    ceph_assert(osdmap->get_pg_pool(pgid.pool())->supports_omap());
     ECOmapJournalEntry new_entry(entry->version, op.clear_omap, op.omap_header, op.omap_updates);
     entry->mod_desc.ec_omap(
       op.clear_omap,

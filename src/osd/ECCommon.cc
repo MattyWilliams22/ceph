@@ -1173,19 +1173,24 @@ void ECCommon::RecoveryBackend::handle_recovery_push(
       coll,
       tobj,
       op.attrset);
-    m->t.omap_clear(
-      coll,
-      tobj);
-    m->t.omap_setheader(
-      coll,
-      tobj,
-      op.omap_header);
+    if (get_parent()->get_pool().supports_omap()) {
+      m->t.omap_clear(
+        coll,
+        tobj);
+      m->t.omap_setheader(
+        coll,
+        tobj,
+        op.omap_header);
+    }
   }
 
-  m->t.omap_setkeys(
+  if (!op.omap_entries.empty()) {
+    ceph_assert(get_parent()->get_pool().supports_omap());
+    m->t.omap_setkeys(
     coll,
     tobj,
     op.omap_entries);
+  }
 
   if (op.after_progress.data_complete && op.after_progress.omap_complete) {
     uint64_t shard_size = sinfo.object_size_to_shard_size(op.recovery_info.size,
@@ -1733,6 +1738,9 @@ ECCommon::RecoveryBackend::recover_object(
   } else {
     op.recovery_progress.omap_complete = !(op.recovery_info.oi.is_omap()
                                             || omap_dirty_in_missing);
+    if (!op.recovery_progress.omap_complete) {
+      ceph_assert(get_parent()->get_pool().supports_omap());
+    }
   }
   dout(10) << __func__ << ": built op " << op << dendl;
   return op;

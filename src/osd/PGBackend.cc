@@ -383,6 +383,7 @@ struct Trimmer : public ObjectModDesc::Visitor {
 
   void ec_omap(bool clear_omap, std::optional<ceph::buffer::list> omap_header,
     std::vector<std::pair<OmapUpdateType, ceph::buffer::list>> &omap_updates) override {
+    ceph_assert(pg->get_parent()->get_pool().supports_omap());
 
     auto shard = pg->get_parent()->whoami_shard().shard;
     spg_t spg = pg->get_parent()->whoami_spg_t();
