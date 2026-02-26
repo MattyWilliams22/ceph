@@ -9,6 +9,7 @@ overrides:
         rgw sts key: abcdefghijklmnop
         rgw s3 auth use sts: true
   rgw:
+    ec-pools: true
     compression type: random
 
 tasks:

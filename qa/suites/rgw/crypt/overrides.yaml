@@ -1,5 +1,6 @@
 overrides:
   rgw:
+    ec-pools: true
     compression type: random
     storage classes:
       LUKEWARM: [--compression, zlib]

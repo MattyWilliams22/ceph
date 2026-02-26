@@ -9,6 +9,7 @@ tasks:
 - ceph:
 - openssl_keys:
 - rgw:
+    ec-pools: true
     client.0:
 - tox: [client.0]
 

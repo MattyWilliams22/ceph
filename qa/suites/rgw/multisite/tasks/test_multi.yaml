@@ -3,6 +3,7 @@ tasks:
 - ceph: {cluster: c1}
 - ceph: {cluster: c2}
 - rgw:
+    ec-pools: true
     c1.client.0:
       port: 8000
     c1.client.1:

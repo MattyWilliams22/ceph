@@ -10,5 +10,6 @@ overrides:
       ca: root
       embed-key: true
   rgw:
+    ec-pools: true
     client.0:
       ssl certificate: rgw.client.0

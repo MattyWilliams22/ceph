@@ -6,4 +6,5 @@ openstack:
     size: 10 # GB
 overrides:
   rgw:
+    ec-pools: true
     frontend: beast

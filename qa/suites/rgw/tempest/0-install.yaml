@@ -10,5 +10,6 @@ tasks:
           type: object-store
           description: Swift Service
 - rgw:
+    ec-pools: true
     client.0:
       use-keystone-role: client.0

@@ -19,6 +19,7 @@ tasks:
         debug ms: 1
         debug objclass : 20
 - rgw:
+    ec-pools: true
     client.0:
 - workunit:
     clients:

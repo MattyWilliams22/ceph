@@ -10,6 +10,7 @@ overrides:
       osd:
         osd fast shutdown: false
   rgw:
+    ec-pools: true
     c1.client.0:
       valgrind: [--tool=memcheck, --max-threads=1024] # http://tracker.ceph.com/issues/25214
     c1.client.1:

@@ -6,6 +6,7 @@ overrides:
         setgroup: ceph
         debug rgw: 20
   rgw:
+    ec-pools: true
     storage classes:
       LUKEWARM:
       FROZEN:

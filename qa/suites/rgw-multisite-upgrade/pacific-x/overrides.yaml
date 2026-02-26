@@ -17,6 +17,7 @@ overrides:
         rgw data log num shards: 4
         rgw sync obj etag verify: true
   rgw:
+    ec-pools: true
     compression type: random
   rgw-multisite-tests:
     branch: pacific # run pacific branch of tests

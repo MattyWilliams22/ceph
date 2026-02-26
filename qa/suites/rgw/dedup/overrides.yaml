@@ -7,6 +7,7 @@ overrides:
         debug rgw: 20
         debug rgw dedup: 20
   rgw:
+    ec-pools: true
     storage classes:
       LUKEWARM:
       FROZEN:
