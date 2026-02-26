@@ -3,6 +3,7 @@ overrides:
     ceph:
       #debuginfo: true
   rgw:
+    ec-pools: true
     client.0:
       valgrind: [--tool=memcheck, --max-threads=1024] # http://tracker.ceph.com/issues/25214
   ceph:

@@ -7,6 +7,7 @@ overrides:
         rgw d3n l1 datacache persistent path: /tmp/rgw_datacache/
         rgw d3n l1 datacache size: 10737418240
   rgw:
+    ec-pools: true
     datacache: true
     datacache_path: /tmp/rgw_datacache
 tasks:

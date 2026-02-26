@@ -23,4 +23,5 @@ overrides:
         rgw s3 auth use sts: true
         rgw sts key: abcdefghijklmnoq
   rgw:
+    ec-pools: true
     compression type: random

@@ -11,6 +11,7 @@ overrides:
         rgw crypt sse s3 vault secret engine: transit
         rgw crypt sse s3 vault prefix: /v1/transit/
   rgw:
+    ec-pools: true
     client.0:
       use-vault-role: client.0
   s3tests:

@@ -7,6 +7,7 @@ overrides:
         rgw crypt vault secret engine: transit
         rgw crypt vault prefix: /v1/transit/export/encryption-key/
   rgw:
+    ec-pools: true
     client.0:
       use-vault-role: client.0
 

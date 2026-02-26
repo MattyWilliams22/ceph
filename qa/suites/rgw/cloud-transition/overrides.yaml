@@ -15,6 +15,7 @@ overrides:
         rgw_restore_debug_interval: 20
         rgw_restore_processor_period: 10
   rgw:
+    ec-pools: true
     storage classes:
       LUKEWARM:
       FROZEN:
