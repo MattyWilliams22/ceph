@@ -20,5 +20,6 @@ overrides:
         debug rgw: 20
         rgw lc debug interval: 10
   rgw:
+    ec-pools: true
     ec-data-pool: false
     frontend: apache

@@ -7,6 +7,7 @@ overrides:
         debug rgw: 20
         rgw bucket logging obj roll time: 5
   rgw:
+    ec-pools: true
     storage classes:
       LUKEWARM:
       FROZEN:

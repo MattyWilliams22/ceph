@@ -7,4 +7,5 @@ overrides:
         debug rgw: 20
         rgw filter: d4n
   rgw:
+    ec-pools: true
     frontend: beast

@@ -1,5 +1,6 @@
 overrides:
   rgw:
+    ec-pools: true
     ec-data-pool: true
     erasure_code_profile:
       name: testprofile

@@ -1,5 +1,6 @@
 overrides:
   rgw:
+    ec-pools: true
     ec-data-pool: true
   s3tests:
     slow_backend: true

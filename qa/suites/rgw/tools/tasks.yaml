@@ -2,6 +2,7 @@ tasks:
 - install:
 - ceph:
 - rgw:
+    ec-pools: true
     client.0:
       # force rgw_dns_name to be set with the fully qualified host name;
       # it will be appended to the empty string

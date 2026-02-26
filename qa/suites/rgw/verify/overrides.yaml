@@ -16,6 +16,7 @@ overrides:
         rgw s3 auth use sts: true
         rgw reshard progress judge interval: 10
   rgw:
+    ec-pools: true
     compression type: random
     storage classes:
       LUKEWARM:

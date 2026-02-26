@@ -12,6 +12,7 @@ overrides:
         rgw crypt require ssl: false
         rgw allow notification secrets in cleartext: true
   rgw:
+    ec-pools: true
     realm: MyRealm
     zonegroup: MyZoneGroup
     zone: MyZone

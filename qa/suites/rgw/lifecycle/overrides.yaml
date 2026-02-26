@@ -12,6 +12,7 @@ overrides:
         rgw s3 auth use sts: true
         rgw lc debug interval: 10
   rgw:
+    ec-pools: true
     storage classes:
       LUKEWARM:
       FROZEN:
