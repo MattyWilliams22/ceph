@@ -1977,15 +1977,16 @@ int FileSystemCommandHandler::_check_pool(
   }
 
   if (pool->is_erasure()) {
-    if (type == POOL_METADATA) {
+    if (type == POOL_METADATA && !pool->supports_omap()) {
       *ss << "pool '" << pool_name << "' (id '" << pool_id << "')"
-         << " is an erasure-coded pool.  Use of erasure-coded pools"
+         << " is an erasure-coded pool that doesn't support omap."  
+         << " Use of erasure-coded pools without omap support"
          << " for CephFS metadata is not permitted";
       return -EINVAL;
-    } else if (type == POOL_DATA_DEFAULT && !force) {
+    } else if (type == POOL_DATA_DEFAULT && !pool->supports_omap() && !force) {
       *ss << "pool '" << pool_name << "' (id '" << pool_id << "')"
-             " is an erasure-coded pool."
-             " Use of an EC pool for the default data pool is discouraged;"
+             " is an erasure-coded pool without omap support."
+             " Use of an EC pool without omap support for the default data pool is discouraged;"
              " see the online CephFS documentation for more information."
              " Use --force to override.";
       return -EINVAL;
