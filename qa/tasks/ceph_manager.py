@@ -2271,6 +2271,11 @@ class CephManager:
                     'osd', 'pool', 'set', pool_name,
                     'allow_ec_overwrites',
                     'true')
+            # This command will fail sometimes, but that's ok
+            self.raw_cluster_cmd_result(
+                'osd', 'pool', 'set', pool_name,
+                'supports_omap',
+                'true')
             self.raw_cluster_cmd(
                 'osd', 'pool', 'application', 'enable',
                 pool_name, 'rados', '--yes-i-really-mean-it',
