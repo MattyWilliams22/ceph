@@ -508,7 +508,7 @@ def task(ctx, config):
     ctx.rgw_cloudtier = None
 
     ctx.rgw.ec_data_pool = bool(config.pop('ec-data-pool', False))
-    ctx.rgw.ec_index_pool = bool(config.pop('ec-pools', False))
+    ctx.rgw.ec_pools = bool(config.pop('ec-pools', False))
     ctx.rgw.erasure_code_profile = config.pop('erasure_code_profile', {})
     ctx.rgw.cache_pools = bool(config.pop('cache-pools', False))
     ctx.rgw.frontend = config.pop('frontend', 'beast')
