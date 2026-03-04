@@ -15,6 +15,7 @@
 #include <unistd.h>
 
 #include "test/osd/RadosModel.h"
+#include "json_spirit/json_spirit.h"
 
 using namespace std;
 
@@ -463,6 +464,54 @@ private:
   bool m_enable_dedup;
   RadosTestContext *context;
 };
+/**
+ * Query whether a pool supports omap operations
+ * 
+ * @param pool_name Name of the pool to query
+ * @param rados Initialized Rados connection object
+ * @return true if pool supports omap, false otherwise
+ */
+bool query_pool_supports_omap(const string& pool_name, librados::Rados& rados)
+{
+  bufferlist inbl, outbl;
+  ostringstream cmd;
+  
+  // Build mon_command to query pool property
+  cmd << "{\"prefix\": \"osd pool get\", "
+      << "\"pool\": \"" << pool_name << "\", "
+      << "\"var\": \"supports_omap\", "
+      << "\"format\": \"json\"}";
+  
+  // Execute command
+  int ret = rados.mon_command(cmd.str(), std::move(inbl), &outbl, nullptr);
+  if (ret < 0) {
+    cerr << "Warning: Failed to query supports_omap for pool " << pool_name 
+         << ": " << cpp_strerror(ret) << std::endl;
+    return false;
+  }
+  
+  // Parse JSON response
+  string outstr(outbl.c_str(), outbl.length());
+  json_spirit::Value v;
+  if (!json_spirit::read(outstr, v)) {
+    cerr << "Warning: Unable to parse JSON response for supports_omap query" << std::endl;
+    return false;
+  }
+  
+  // Extract supports_omap value from JSON
+  json_spirit::Object& obj = v.get_obj();
+  for (json_spirit::Object::size_type i = 0; i < obj.size(); i++) {
+    json_spirit::Pair& pair = obj[i];
+    if (pair.name_ == "supports_omap") {
+      return pair.value_.get_bool();
+    }
+  }
+  
+  // If key not found, assume false
+  cerr << "Warning: supports_omap key not found in response" << std::endl;
+  return false;
+}
+
 
 int main(int argc, char **argv)
 {
@@ -574,7 +623,6 @@ int main(int argc, char **argv)
 	exit(1);
       }
       ec_pool = true;
-      no_omap = true;
       no_sparse = true;
     } else if (strcmp(argv[i], "--op") == 0) {
       i++;
@@ -733,6 +781,20 @@ int main(int argc, char **argv)
 	 << cpp_strerror(r) << std::endl;
     exit(1);
   }
+
+  // Query pool's supports_omap if user didn't explicitly set --no-omap
+  if (!no_omap) {
+    bool pool_supports_omap = query_pool_supports_omap(pool_name, context.rados);
+    if (!pool_supports_omap) {
+      cout << "Pool " << pool_name << " does not support omap, setting no_omap=true" << std::endl;
+      no_omap = true;
+      // Update context's no_omap flag for consistency
+      const_cast<bool&>(context.no_omap) = true;
+    } else {
+      cout << "Pool " << pool_name << " supports omap" << std::endl;
+    }
+  }
+
   context.loop(&gen);
   if (enable_dedup) {
     if (!context.check_chunks_refcount(context.low_tier_io_ctx, context.io_ctx)) {
