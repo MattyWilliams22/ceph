@@ -1653,6 +1653,7 @@ int ECBackend::omap_get_header(
   if (header_from_journal) {
     *header = *header_from_journal;
   } else {
+    header->clear();  // Ensure bufferlist is empty before calling store
     store->omap_get_header(c_, oid, header, allow_eio);
   }
   return 0;

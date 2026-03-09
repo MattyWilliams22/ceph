@@ -470,15 +470,26 @@ TEST_P(OmapTest, OmapClear) {
   int ret = ioctx.operate(oid, &write_op);
   EXPECT_EQ(ret, 0);
   
-  // Verify all omap data was cleared
+  // Verify all omap data and the header were cleared
   int err = 0;
+  int header_err = 0;
   std::set<std::string> returned_keys;
+  bufferlist returned_header;
+
   ObjectReadOperation read;
   read.omap_get_keys2("", LONG_MAX, &returned_keys, nullptr, &err);
+  read.omap_get_header(&returned_header, &header_err); // Queue header read
+
   ret = ioctx.operate(oid, &read, nullptr);
   EXPECT_EQ(ret, 0);
+
+  // Check keys
   ASSERT_EQ(0, err);
   ASSERT_TRUE(returned_keys.empty());
+
+  // Check header
+  ASSERT_EQ(0, header_err);
+  EXPECT_EQ(0u, returned_header.length());
 }
 
 TEST_P(OmapTest, OmapRecovery) {
