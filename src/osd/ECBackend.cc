@@ -1869,7 +1869,7 @@ bool ECBackend::should_be_removed(
   if (removed_ranges.empty()) {
     return false;
   }
-  
+
   // Find range that comes after this key
   auto it = removed_ranges.upper_bound(std::string(key));
 
