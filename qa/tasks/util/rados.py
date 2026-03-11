@@ -36,7 +36,7 @@ def create_ec_pool(remote, name, profile_name, pgnum, profile={}, cluster_name="
         'sudo', 'ceph', 'osd', 'pool', 'set', name, 'allow_ec_overwrites', 'true', '--cluster', cluster_name
         ])
     remote.run(args=[
-        'sudo', 'ceph', 'osd', 'pool', 'set', name, 'ec_optimizations', 'true', '--cluster', cluster_name
+        'sudo', 'ceph', 'osd', 'pool', 'set', name, 'allow_ec_optimizations', 'true', '--cluster', cluster_name
         ])
     remote.run(args=[
         'sudo', 'ceph', 'osd', 'pool', 'set', name, 'supports_omap', 'true', '--cluster', cluster_name
