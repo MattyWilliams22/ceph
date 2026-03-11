@@ -299,12 +299,22 @@ private:
       return new DeleteOp(m_op, &context, oid, m_stats);
 
     case TEST_OP_SNAP_CREATE:
+      // Block snap operations in EC pools when omap is enabled
+      // because cloning is not yet handled for omap in EC pools
+      if (m_ec_pool && !context.no_omap) {
+        return NULL;
+      }
       context.cout_prefix() << m_op << ": " << "snap_create" << std::endl;
       return new SnapCreateOp(m_op, &context, m_stats);
 
     case TEST_OP_SNAP_REMOVE:
+      // Block snap operations in EC pools when omap is enabled
+      // because cloning is not yet handled for omap in EC pools
+      if (m_ec_pool && !context.no_omap) {
+        return NULL;
+      }
       if (context.snaps.size() <= context.snaps_in_use.size()) {
-	return NULL;
+        return NULL;
       }
       while (true) {
 	int snap = rand_choose(context.snaps)->first;
