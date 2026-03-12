@@ -1,4 +1,3 @@
 overrides:
   rgw:
-    ec-pools: true
     ec-data-pool: false
