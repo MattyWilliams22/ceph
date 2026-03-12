@@ -6,7 +6,6 @@ tasks:
 - parallel:
   - upgrade-task
 - rgw:
-    ec-pools: true
     c1.client.0:
       port: 8000
     c2.client.0:
