@@ -8622,6 +8622,14 @@ int PrimaryLogPG::_rollback_to(OpContext *ctx, OSDOp& op)
       // rolling back to the head; we just need to clone it.
       ctx->modify = true;
     } else {
+      // EC pools cannot support rollback of objects with omap
+      if (pool.info.is_erasure() &&
+          (ctx->obs->oi.is_omap() || rollback_to->obs.oi.is_omap())) {
+        dout(10) << __func__ << " cannot rollback object with omap in EC pool: "
+                 << soid << " (current has_omap=" << ctx->obs->oi.is_omap()
+                 << ", rollback_to has_omap=" << rollback_to->obs.oi.is_omap() << ")" << dendl;
+        return -EOPNOTSUPP;
+      }
       if (rollback_to->obs.oi.has_manifest() && rollback_to->obs.oi.manifest.is_chunked()) {
 	/*
 	 * looking at the following case, the foo head needs the reference of chunk4 and chunk5
@@ -9154,8 +9162,22 @@ int PrimaryLogPG::prepare_transaction(OpContext *ctx)
 
   const hobject_t& soid = ctx->obs->oi.soid;
   // clone, if necessary
-  if (soid.snap == CEPH_NOSNAP)
+  if (soid.snap == CEPH_NOSNAP) {
+    // Check if we need to create a clone and block if object has omap in EC pool
+    if (ctx->obs->exists &&
+        !ctx->obs->oi.is_whiteout() &&
+        ctx->snapc.snaps.size() &&
+        !ctx->cache_operation &&
+        ctx->snapc.snaps[0] > ctx->new_snapset.seq) {
+      // Block clone if object has omap in an EC pool
+      if (pool.info.is_erasure() && ctx->obs->oi.is_omap()) {
+        dout(10) << __func__ << " cannot create clone of object with omap in EC pool: "
+                 << soid << dendl;
+        return -EOPNOTSUPP;
+      }
+    }
     make_writeable(ctx);
+  }
 
   finish_ctx(ctx,
 	     ctx->new_obs.exists ? pg_log_entry_t::MODIFY :
