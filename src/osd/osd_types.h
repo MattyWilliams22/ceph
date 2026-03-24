@@ -4178,18 +4178,6 @@ public:
     encode(omap_updates, bl);
     ENCODE_FINISH(bl);
   }
-  void ec_omap(bool clear_omap, std::optional<ceph::buffer::list> omap_header,
-    std::vector<std::pair<OmapUpdateType, ceph::buffer::list>> &omap_updates) {
-    if(!can_local_rollback) {
-      return;
-    }
-    ENCODE_START(1, 1, bl);
-    append_id(EC_OMAP);
-    encode(clear_omap, bl);
-    encode(omap_header, bl);
-    encode(omap_updates, bl);
-    ENCODE_FINISH(bl);
-  }
   bool rmobject(version_t deletion_version) {
     if (!can_local_rollback || rollback_info_completed) {
       return false;
