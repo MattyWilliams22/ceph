@@ -353,7 +353,9 @@ struct Trimmer : public ObjectModDesc::Visitor {
       old_version,
       t);
 
-    pg->omap_trim_delete_from_journal(soid, old_version);
+    if (pg->get_parent()->get_pool().allows_ecoptimizations()) {
+      pg->omap_trim_delete_from_journal(soid, old_version);
+    }
   }
   // try_rmobject defaults to rmobject
   void rollback_extents(

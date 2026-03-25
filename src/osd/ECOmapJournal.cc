@@ -148,6 +148,33 @@ std::size_t ECOmapJournal::entries_size(const hobject_t &hoid) const {
   return 0u;
 }
 
+bool ECOmapJournal::has_omap_updates(const hobject_t &hoid) const {
+  // Check unprocessed entries
+  if (const auto entries_it = entries.find(hoid);
+    entries_it != entries.end() && !entries_it->second.empty()) {
+    return true;
+  }
+  
+  // Check processed key map
+  if (const auto key_it = key_map.find(hoid);
+    key_it != key_map.end() && !key_it->second.empty()) {
+    return true;
+  }
+  
+  // Check removed ranges
+  if (const auto ranges_it = removed_ranges_map.find(hoid);
+    ranges_it != removed_ranges_map.end() && !ranges_it->second.empty()) {
+    return true;
+  }
+  
+  // Check header updates
+  if (header_map.find(hoid) != header_map.end()) {
+    return true;
+  }
+  
+  return false;
+}
+
 // Function to get specific object's entries, if not present, creates an empty list
 std::list<ECOmapJournalEntry>& ECOmapJournal::get_entries(const hobject_t &hoid) {
   return entries[hoid];

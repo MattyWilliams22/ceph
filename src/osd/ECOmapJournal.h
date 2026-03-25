@@ -139,6 +139,7 @@ class ECOmapJournal {
   void clear(const hobject_t &hoid);
   void clear_all();
   [[nodiscard]] std::size_t entries_size(const hobject_t &hoid) const;
+  [[nodiscard]] bool has_omap_updates(const hobject_t &hoid) const;
   std::tuple<UpdateMapType, RangeMapType> get_value_updates(const hobject_t &hoid);
   std::optional<ceph::buffer::list> get_updated_header(const hobject_t &hoid);
   void append_delete(const hobject_t &hoid, const version_t version, const bool lost_delete);

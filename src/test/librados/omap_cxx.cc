@@ -753,6 +753,681 @@ TEST_P(OmapTest, OmapAfterDelete) {
   ASSERT_EQ(1u, returned_keys.count("new_key"));
 }
 
+TEST_P(OmapTest, CloneBasic) {
+  SKIP_IF_CRIMSON();
+  
+  const std::string oid = "test_omap_clone_basic";
+  const std::string original_header = "original_header";
+  const std::string original_value = "original_value";
+  
+  // Create object with OMAP data
+  bufferlist header_bl;
+  encode(original_header, header_bl);
+  
+  bufferlist val_bl;
+  encode(original_value, val_bl);
+  std::map<std::string, bufferlist> omap_map = {
+    {"key1", val_bl},
+    {"key2", val_bl},
+    {"key3", val_bl}
+  };
+  
+  create_test_object_with_omap(oid, omap_map, header_bl);
+  
+  // Create snapshot (this triggers clone operation)
+  std::vector<uint64_t> my_snaps;
+  my_snaps.push_back(-2);
+  ASSERT_EQ(0, ioctx.selfmanaged_snap_create(&my_snaps.back()));
+  ::std::reverse(my_snaps.begin(), my_snaps.end());
+  ASSERT_EQ(0, ioctx.selfmanaged_snap_set_write_ctx(my_snaps[0], my_snaps));
+  ::std::reverse(my_snaps.begin(), my_snaps.end());
+  
+  // Write to object to trigger clone creation before modifying OMAP
+  bufferlist write_bl;
+  write_bl.append("trigger_clone");
+  ASSERT_EQ(0, ioctx.write(oid, write_bl, write_bl.length(), 0));
+  
+  // Modify head object OMAP
+  const std::string new_header = "modified_header";
+  const std::string new_value = "modified_value";
+  bufferlist new_header_bl;
+  encode(new_header, new_header_bl);
+  bufferlist new_val_bl;
+  encode(new_value, new_val_bl);
+  
+  ObjectWriteOperation write_op;
+  write_op.omap_set_header(new_header_bl);
+  std::map<std::string, bufferlist> new_omap = {{"key4", new_val_bl}};
+  write_op.omap_set(new_omap);
+  ASSERT_EQ(0, ioctx.operate(oid, &write_op));
+  
+  // Verify clone has original OMAP data
+  IoCtx snap_ioctx;
+  ASSERT_EQ(0, rados.ioctx_create(pool_name.c_str(), snap_ioctx));
+  snap_ioctx.set_namespace(nspace);
+  snap_ioctx.snap_set_read(my_snaps[0]);
+  
+  // Check clone header
+  bufferlist clone_header_bl;
+  int err = 0;
+  ObjectReadOperation read_clone;
+  read_clone.omap_get_header(&clone_header_bl, &err);
+  ASSERT_EQ(0, snap_ioctx.operate(oid, &read_clone, nullptr));
+  ASSERT_EQ(0, err);
+  
+  std::string clone_header;
+  decode(clone_header, clone_header_bl);
+  ASSERT_EQ(original_header, clone_header);
+  
+  // Check clone keys
+  std::set<std::string> clone_keys;
+  ObjectReadOperation read_clone_keys;
+  err = 0;
+  read_clone_keys.omap_get_keys2("", LONG_MAX, &clone_keys, nullptr, &err);
+  ASSERT_EQ(0, snap_ioctx.operate(oid, &read_clone_keys, nullptr));
+  ASSERT_EQ(0, err);
+  ASSERT_EQ(3u, clone_keys.size());
+  ASSERT_EQ(1u, clone_keys.count("key1"));
+  ASSERT_EQ(1u, clone_keys.count("key2"));
+  ASSERT_EQ(1u, clone_keys.count("key3"));
+  ASSERT_EQ(0u, clone_keys.count("key4"));
+  
+  // Verify head has modified OMAP data
+  ioctx.snap_set_read(LIBRADOS_SNAP_HEAD);
+  bufferlist head_header_bl;
+  ObjectReadOperation read_head;
+  err = 0;
+  read_head.omap_get_header(&head_header_bl, &err);
+  ASSERT_EQ(0, ioctx.operate(oid, &read_head, nullptr));
+  ASSERT_EQ(0, err);
+  
+  std::string head_header;
+  decode(head_header, head_header_bl);
+  ASSERT_EQ(new_header, head_header);
+  
+  // Check head keys
+  std::set<std::string> head_keys;
+  ObjectReadOperation read_head_keys;
+  err = 0;
+  read_head_keys.omap_get_keys2("", LONG_MAX, &head_keys, nullptr, &err);
+  ASSERT_EQ(0, ioctx.operate(oid, &read_head_keys, nullptr));
+  ASSERT_EQ(0, err);
+  ASSERT_EQ(4u, head_keys.size());
+  ASSERT_EQ(1u, head_keys.count("key4"));
+  
+  // Cleanup
+  ASSERT_EQ(0, ioctx.selfmanaged_snap_remove(my_snaps.back()));
+  snap_ioctx.close();
+}
+
+TEST_P(OmapTest, CloneHeader) {
+  SKIP_IF_CRIMSON();
+  
+  const std::string oid = "test_omap_clone_header";
+  const std::string header1 = "header_version_1";
+  const std::string header2 = "header_version_2";
+  
+  // Create object with OMAP header
+  bufferlist header1_bl;
+  encode(header1, header1_bl);
+  std::map<std::string, bufferlist> omap_map;
+  create_test_object_with_omap(oid, omap_map, header1_bl);
+  
+  // Create snapshot
+  std::vector<uint64_t> my_snaps;
+  my_snaps.push_back(-2);
+  ASSERT_EQ(0, ioctx.selfmanaged_snap_create(&my_snaps.back()));
+  ::std::reverse(my_snaps.begin(), my_snaps.end());
+  ASSERT_EQ(0, ioctx.selfmanaged_snap_set_write_ctx(my_snaps[0], my_snaps));
+  ::std::reverse(my_snaps.begin(), my_snaps.end());
+  
+  // Write to object to trigger clone creation
+  bufferlist write_bl;
+  write_bl.append("trigger_clone");
+  ASSERT_EQ(0, ioctx.write(oid, write_bl, write_bl.length(), 0));
+  
+  // Change header on head
+  bufferlist header2_bl;
+  encode(header2, header2_bl);
+  ObjectWriteOperation write_op;
+  write_op.omap_set_header(header2_bl);
+  ASSERT_EQ(0, ioctx.operate(oid, &write_op));
+  
+  // Verify clone has original header
+  IoCtx snap_ioctx;
+  ASSERT_EQ(0, rados.ioctx_create(pool_name.c_str(), snap_ioctx));
+  snap_ioctx.set_namespace(nspace);
+  snap_ioctx.snap_set_read(my_snaps[0]);
+  
+  bufferlist clone_header_bl;
+  int err = 0;
+  ObjectReadOperation read_clone;
+  read_clone.omap_get_header(&clone_header_bl, &err);
+  ASSERT_EQ(0, snap_ioctx.operate(oid, &read_clone, nullptr));
+  ASSERT_EQ(0, err);
+  
+  std::string clone_header;
+  decode(clone_header, clone_header_bl);
+  ASSERT_EQ(header1, clone_header);
+  
+  // Verify head has new header
+  ioctx.snap_set_read(LIBRADOS_SNAP_HEAD);
+  bufferlist head_header_bl;
+  ObjectReadOperation read_head;
+  err = 0;
+  read_head.omap_get_header(&head_header_bl, &err);
+  ASSERT_EQ(0, ioctx.operate(oid, &read_head, nullptr));
+  ASSERT_EQ(0, err);
+  
+  std::string head_header;
+  decode(head_header, head_header_bl);
+  ASSERT_EQ(header2, head_header);
+  
+  // Cleanup
+  ASSERT_EQ(0, ioctx.selfmanaged_snap_remove(my_snaps.back()));
+  snap_ioctx.close();
+}
+
+TEST_P(OmapTest, CloneKeyModifications) {
+  SKIP_IF_CRIMSON();
+  
+  const std::string oid = "test_omap_clone_keys";
+  const std::string value = "test_value";
+  
+  // Create object with OMAP keys
+  bufferlist val_bl;
+  encode(value, val_bl);
+  std::map<std::string, bufferlist> omap_map = {
+    {"original_key1", val_bl},
+    {"original_key2", val_bl},
+    {"to_be_removed", val_bl}
+  };
+  bufferlist header_bl;
+  create_test_object_with_omap(oid, omap_map, header_bl);
+  
+  // Create snapshot
+  std::vector<uint64_t> my_snaps;
+  my_snaps.push_back(-2);
+  ASSERT_EQ(0, ioctx.selfmanaged_snap_create(&my_snaps.back()));
+  ::std::reverse(my_snaps.begin(), my_snaps.end());
+  ASSERT_EQ(0, ioctx.selfmanaged_snap_set_write_ctx(my_snaps[0], my_snaps));
+  ::std::reverse(my_snaps.begin(), my_snaps.end());
+  
+  // Write to object to trigger clone creation
+  bufferlist write_bl;
+  write_bl.append("trigger_clone");
+  ASSERT_EQ(0, ioctx.write(oid, write_bl, write_bl.length(), 0));
+  
+  // Modify keys on head: add, remove, and modify
+  ObjectWriteOperation write_op;
+  std::map<std::string, bufferlist> new_keys = {{"new_key", val_bl}};
+  write_op.omap_set(new_keys);
+  std::set<std::string> remove_keys = {"to_be_removed"};
+  write_op.omap_rm_keys(remove_keys);
+  ASSERT_EQ(0, ioctx.operate(oid, &write_op));
+  
+  // Verify clone has original keys
+  IoCtx snap_ioctx;
+  ASSERT_EQ(0, rados.ioctx_create(pool_name.c_str(), snap_ioctx));
+  snap_ioctx.set_namespace(nspace);
+  snap_ioctx.snap_set_read(my_snaps[0]);
+  
+  std::set<std::string> clone_keys;
+  int err = 0;
+  ObjectReadOperation read_clone;
+  read_clone.omap_get_keys2("", LONG_MAX, &clone_keys, nullptr, &err);
+  ASSERT_EQ(0, snap_ioctx.operate(oid, &read_clone, nullptr));
+  ASSERT_EQ(0, err);
+  ASSERT_EQ(3u, clone_keys.size());
+  ASSERT_EQ(1u, clone_keys.count("original_key1"));
+  ASSERT_EQ(1u, clone_keys.count("original_key2"));
+  ASSERT_EQ(1u, clone_keys.count("to_be_removed"));
+  ASSERT_EQ(0u, clone_keys.count("new_key"));
+  
+  // Verify head has modified keys
+  ioctx.snap_set_read(LIBRADOS_SNAP_HEAD);
+  std::set<std::string> head_keys;
+  ObjectReadOperation read_head;
+  err = 0;
+  read_head.omap_get_keys2("", LONG_MAX, &head_keys, nullptr, &err);
+  ASSERT_EQ(0, ioctx.operate(oid, &read_head, nullptr));
+  ASSERT_EQ(0, err);
+  ASSERT_EQ(3u, head_keys.size());
+  ASSERT_EQ(1u, head_keys.count("original_key1"));
+  ASSERT_EQ(1u, head_keys.count("original_key2"));
+  ASSERT_EQ(0u, head_keys.count("to_be_removed"));
+  ASSERT_EQ(1u, head_keys.count("new_key"));
+  
+  // Cleanup
+  ASSERT_EQ(0, ioctx.selfmanaged_snap_remove(my_snaps.back()));
+  snap_ioctx.close();
+}
+
+TEST_P(OmapTest, CloneMultiple) {
+  SKIP_IF_CRIMSON();
+  
+  const std::string oid = "test_omap_clone_multiple";
+  const std::string value = "value";
+  
+  // Create object with initial OMAP data
+  bufferlist val_bl;
+  encode(value, val_bl);
+  std::map<std::string, bufferlist> omap_map1 = {{"key1", val_bl}};
+  bufferlist header_bl;
+  create_test_object_with_omap(oid, omap_map1, header_bl);
+  
+  // Create first snapshot
+  std::vector<uint64_t> my_snaps;
+  my_snaps.push_back(-2);
+  ASSERT_EQ(0, ioctx.selfmanaged_snap_create(&my_snaps.back()));
+  ::std::reverse(my_snaps.begin(), my_snaps.end());
+  ASSERT_EQ(0, ioctx.selfmanaged_snap_set_write_ctx(my_snaps[0], my_snaps));
+  ::std::reverse(my_snaps.begin(), my_snaps.end());
+  
+  // Write to object to trigger first clone creation
+  bufferlist write_bl1;
+  write_bl1.append("clone1");
+  ASSERT_EQ(0, ioctx.write(oid, write_bl1, write_bl1.length(), 0));
+  
+  // Modify OMAP
+  ObjectWriteOperation write_op1;
+  std::map<std::string, bufferlist> omap_map2 = {{"key2", val_bl}};
+  write_op1.omap_set(omap_map2);
+  ASSERT_EQ(0, ioctx.operate(oid, &write_op1));
+  
+  // Create second snapshot
+  my_snaps.push_back(-2);
+  ASSERT_EQ(0, ioctx.selfmanaged_snap_create(&my_snaps.back()));
+  ::std::reverse(my_snaps.begin(), my_snaps.end());
+  ASSERT_EQ(0, ioctx.selfmanaged_snap_set_write_ctx(my_snaps[0], my_snaps));
+  ::std::reverse(my_snaps.begin(), my_snaps.end());
+  
+  // Write to object to trigger second clone creation
+  bufferlist write_bl2;
+  write_bl2.append("clone2");
+  ASSERT_EQ(0, ioctx.write(oid, write_bl2, write_bl2.length(), 0));
+  
+  // Modify OMAP again
+  ObjectWriteOperation write_op2;
+  std::map<std::string, bufferlist> omap_map3 = {{"key3", val_bl}};
+  write_op2.omap_set(omap_map3);
+  ASSERT_EQ(0, ioctx.operate(oid, &write_op2));
+  
+  // Verify first clone has only key1
+  IoCtx snap_ioctx;
+  ASSERT_EQ(0, rados.ioctx_create(pool_name.c_str(), snap_ioctx));
+  snap_ioctx.set_namespace(nspace);
+  snap_ioctx.snap_set_read(my_snaps[0]);
+  
+  std::set<std::string> clone1_keys;
+  int err = 0;
+  ObjectReadOperation read_clone1;
+  read_clone1.omap_get_keys2("", LONG_MAX, &clone1_keys, nullptr, &err);
+  ASSERT_EQ(0, snap_ioctx.operate(oid, &read_clone1, nullptr));
+  ASSERT_EQ(0, err);
+  ASSERT_EQ(1u, clone1_keys.size());
+  ASSERT_EQ(1u, clone1_keys.count("key1"));
+  
+  // Verify second clone has key1 and key2
+  snap_ioctx.snap_set_read(my_snaps[1]);
+  std::set<std::string> clone2_keys;
+  ObjectReadOperation read_clone2;
+  err = 0;
+  read_clone2.omap_get_keys2("", LONG_MAX, &clone2_keys, nullptr, &err);
+  ASSERT_EQ(0, snap_ioctx.operate(oid, &read_clone2, nullptr));
+  ASSERT_EQ(0, err);
+  ASSERT_EQ(2u, clone2_keys.size());
+  ASSERT_EQ(1u, clone2_keys.count("key1"));
+  ASSERT_EQ(1u, clone2_keys.count("key2"));
+  
+  // Verify head has all three keys
+  ioctx.snap_set_read(LIBRADOS_SNAP_HEAD);
+  std::set<std::string> head_keys;
+  ObjectReadOperation read_head;
+  err = 0;
+  read_head.omap_get_keys2("", LONG_MAX, &head_keys, nullptr, &err);
+  ASSERT_EQ(0, ioctx.operate(oid, &read_head, nullptr));
+  ASSERT_EQ(0, err);
+  ASSERT_EQ(3u, head_keys.size());
+  ASSERT_EQ(1u, head_keys.count("key1"));
+  ASSERT_EQ(1u, head_keys.count("key2"));
+  ASSERT_EQ(1u, head_keys.count("key3"));
+  
+  // Cleanup
+  ASSERT_EQ(0, ioctx.selfmanaged_snap_remove(my_snaps[0]));
+  ASSERT_EQ(0, ioctx.selfmanaged_snap_remove(my_snaps[1]));
+  snap_ioctx.close();
+}
+
+TEST_P(OmapTest, CloneAfterClear) {
+  SKIP_IF_CRIMSON();
+  
+  const std::string oid = "test_omap_clone_after_clear";
+  const std::string value = "value";
+  
+  // Create object with OMAP data
+  bufferlist val_bl;
+  encode(value, val_bl);
+  std::map<std::string, bufferlist> omap_map = {
+    {"key1", val_bl},
+    {"key2", val_bl}
+  };
+  bufferlist header_bl;
+  encode("header", header_bl);
+  create_test_object_with_omap(oid, omap_map, header_bl);
+  
+  // Clear OMAP
+  ObjectWriteOperation clear_op;
+  clear_op.omap_clear();
+  ASSERT_EQ(0, ioctx.operate(oid, &clear_op));
+  
+  // Create snapshot
+  std::vector<uint64_t> my_snaps;
+  my_snaps.push_back(-2);
+  ASSERT_EQ(0, ioctx.selfmanaged_snap_create(&my_snaps.back()));
+  ::std::reverse(my_snaps.begin(), my_snaps.end());
+  ASSERT_EQ(0, ioctx.selfmanaged_snap_set_write_ctx(my_snaps[0], my_snaps));
+  ::std::reverse(my_snaps.begin(), my_snaps.end());
+  
+  // Write to object to trigger clone creation
+  bufferlist write_bl;
+  write_bl.append("trigger_clone");
+  ASSERT_EQ(0, ioctx.write(oid, write_bl, write_bl.length(), 0));
+  
+  // Add new OMAP data to head
+  ObjectWriteOperation write_op;
+  std::map<std::string, bufferlist> new_omap = {{"new_key", val_bl}};
+  write_op.omap_set(new_omap);
+  ASSERT_EQ(0, ioctx.operate(oid, &write_op));
+  
+  // Verify clone has no OMAP data
+  IoCtx snap_ioctx;
+  ASSERT_EQ(0, rados.ioctx_create(pool_name.c_str(), snap_ioctx));
+  snap_ioctx.set_namespace(nspace);
+  snap_ioctx.snap_set_read(my_snaps[0]);
+  
+  std::set<std::string> clone_keys;
+  int err = 0;
+  ObjectReadOperation read_clone;
+  read_clone.omap_get_keys2("", LONG_MAX, &clone_keys, nullptr, &err);
+  ASSERT_EQ(0, snap_ioctx.operate(oid, &read_clone, nullptr));
+  ASSERT_EQ(0, err);
+  ASSERT_TRUE(clone_keys.empty());
+  
+  // Verify head has new OMAP data
+  ioctx.snap_set_read(LIBRADOS_SNAP_HEAD);
+  std::set<std::string> head_keys;
+  ObjectReadOperation read_head;
+  err = 0;
+  read_head.omap_get_keys2("", LONG_MAX, &head_keys, nullptr, &err);
+  ASSERT_EQ(0, ioctx.operate(oid, &read_head, nullptr));
+  ASSERT_EQ(0, err);
+  ASSERT_EQ(1u, head_keys.size());
+  ASSERT_EQ(1u, head_keys.count("new_key"));
+  
+  // Cleanup
+  ASSERT_EQ(0, ioctx.selfmanaged_snap_remove(my_snaps.back()));
+  snap_ioctx.close();
+}
+
+TEST_P(OmapTest, CloneMixedOperations) {
+  SKIP_IF_CRIMSON();
+  
+  const std::string oid = "test_omap_clone_mixed";
+  const std::string header1 = "header1";
+  const std::string header2 = "header2";
+  const std::string value = "value";
+  
+  // Create object with OMAP data
+  bufferlist header1_bl;
+  encode(header1, header1_bl);
+  bufferlist val_bl;
+  encode(value, val_bl);
+  std::map<std::string, bufferlist> omap_map = {
+    {"keep_key", val_bl},
+    {"remove_key", val_bl},
+    {"modify_key", val_bl}
+  };
+  create_test_object_with_omap(oid, omap_map, header1_bl);
+  
+  // Create snapshot
+  std::vector<uint64_t> my_snaps;
+  my_snaps.push_back(-2);
+  ASSERT_EQ(0, ioctx.selfmanaged_snap_create(&my_snaps.back()));
+  ::std::reverse(my_snaps.begin(), my_snaps.end());
+  ASSERT_EQ(0, ioctx.selfmanaged_snap_set_write_ctx(my_snaps[0], my_snaps));
+  ::std::reverse(my_snaps.begin(), my_snaps.end());
+  
+  // Write to object to trigger clone creation
+  bufferlist write_bl;
+  write_bl.append("trigger_clone");
+  ASSERT_EQ(0, ioctx.write(oid, write_bl, write_bl.length(), 0));
+  
+  // Perform mixed operations on head
+  bufferlist header2_bl;
+  encode(header2, header2_bl);
+  bufferlist new_val_bl;
+  encode("new_value", new_val_bl);
+  
+  ObjectWriteOperation write_op;
+  write_op.omap_set_header(header2_bl);
+  std::map<std::string, bufferlist> add_keys = {
+    {"add_key", val_bl},
+    {"modify_key", new_val_bl}
+  };
+  write_op.omap_set(add_keys);
+  std::set<std::string> remove_keys = {"remove_key"};
+  write_op.omap_rm_keys(remove_keys);
+  ASSERT_EQ(0, ioctx.operate(oid, &write_op));
+  
+  // Verify clone has original state
+  IoCtx snap_ioctx;
+  ASSERT_EQ(0, rados.ioctx_create(pool_name.c_str(), snap_ioctx));
+  snap_ioctx.set_namespace(nspace);
+  snap_ioctx.snap_set_read(my_snaps[0]);
+  
+  // Check clone header
+  bufferlist clone_header_bl;
+  int err = 0;
+  ObjectReadOperation read_clone;
+  read_clone.omap_get_header(&clone_header_bl, &err);
+  ASSERT_EQ(0, snap_ioctx.operate(oid, &read_clone, nullptr));
+  ASSERT_EQ(0, err);
+  
+  std::string clone_header;
+  decode(clone_header, clone_header_bl);
+  ASSERT_EQ(header1, clone_header);
+  
+  // Check clone keys
+  std::set<std::string> clone_keys;
+  ObjectReadOperation read_clone_keys;
+  err = 0;
+  read_clone_keys.omap_get_keys2("", LONG_MAX, &clone_keys, nullptr, &err);
+  ASSERT_EQ(0, snap_ioctx.operate(oid, &read_clone_keys, nullptr));
+  ASSERT_EQ(0, err);
+  ASSERT_EQ(3u, clone_keys.size());
+  ASSERT_EQ(1u, clone_keys.count("keep_key"));
+  ASSERT_EQ(1u, clone_keys.count("remove_key"));
+  ASSERT_EQ(1u, clone_keys.count("modify_key"));
+  ASSERT_EQ(0u, clone_keys.count("add_key"));
+  
+  // Check clone value for modify_key
+  std::map<std::string, bufferlist> clone_vals;
+  ObjectReadOperation read_clone_vals;
+  err = 0;
+  read_clone_vals.omap_get_vals2("", LONG_MAX, &clone_vals, nullptr, &err);
+  ASSERT_EQ(0, snap_ioctx.operate(oid, &read_clone_vals, nullptr));
+  ASSERT_EQ(0, err);
+  std::string clone_modify_val;
+  decode(clone_modify_val, clone_vals["modify_key"]);
+  ASSERT_EQ(value, clone_modify_val);
+  
+  // Verify head has modified state
+  ioctx.snap_set_read(LIBRADOS_SNAP_HEAD);
+  
+  // Check head header
+  bufferlist head_header_bl;
+  ObjectReadOperation read_head;
+  err = 0;
+  read_head.omap_get_header(&head_header_bl, &err);
+  ASSERT_EQ(0, ioctx.operate(oid, &read_head, nullptr));
+  ASSERT_EQ(0, err);
+  
+  std::string head_header;
+  decode(head_header, head_header_bl);
+  ASSERT_EQ(header2, head_header);
+  
+  // Check head keys
+  std::set<std::string> head_keys;
+  ObjectReadOperation read_head_keys;
+  err = 0;
+  read_head_keys.omap_get_keys2("", LONG_MAX, &head_keys, nullptr, &err);
+  ASSERT_EQ(0, ioctx.operate(oid, &read_head_keys, nullptr));
+  ASSERT_EQ(0, err);
+  ASSERT_EQ(3u, head_keys.size());
+  ASSERT_EQ(1u, head_keys.count("keep_key"));
+  ASSERT_EQ(0u, head_keys.count("remove_key"));
+  ASSERT_EQ(1u, head_keys.count("modify_key"));
+  ASSERT_EQ(1u, head_keys.count("add_key"));
+  
+  // Check head value for modify_key
+  std::map<std::string, bufferlist> head_vals;
+  ObjectReadOperation read_head_vals;
+  err = 0;
+  read_head_vals.omap_get_vals2("", LONG_MAX, &head_vals, nullptr, &err);
+  ASSERT_EQ(0, ioctx.operate(oid, &read_head_vals, nullptr));
+  ASSERT_EQ(0, err);
+  std::string head_modify_val;
+  decode(head_modify_val, head_vals["modify_key"]);
+  ASSERT_EQ("new_value", head_modify_val);
+  
+  // Cleanup
+  ASSERT_EQ(0, ioctx.selfmanaged_snap_remove(my_snaps.back()));
+  snap_ioctx.close();
+}
+
+TEST_P(OmapTest, CloneRollback) {
+  SKIP_IF_CRIMSON();
+  
+  const std::string oid = "test_omap_rollback_basic";
+  const std::string initial_header = "initial_header";
+  const std::string initial_value = "initial_value";
+  
+  // Create object with initial OMAP data
+  bufferlist header_bl;
+  encode(initial_header, header_bl);
+  
+  bufferlist val_bl;
+  encode(initial_value, val_bl);
+  std::map<std::string, bufferlist> initial_omap = {
+    {"key1", val_bl},
+    {"key2", val_bl}
+  };
+  
+  create_test_object_with_omap(oid, initial_omap, header_bl);
+  
+  // Create snapshot (this triggers clone operation)
+  std::vector<uint64_t> my_snaps;
+  my_snaps.push_back(-2);
+  ASSERT_EQ(0, ioctx.selfmanaged_snap_create(&my_snaps.back()));
+  ::std::reverse(my_snaps.begin(), my_snaps.end());
+  ASSERT_EQ(0, ioctx.selfmanaged_snap_set_write_ctx(my_snaps[0], my_snaps));
+  ::std::reverse(my_snaps.begin(), my_snaps.end());
+  
+  // Write to object to trigger clone creation before modifying OMAP
+  bufferlist write_bl;
+  write_bl.append("trigger_clone");
+  ASSERT_EQ(0, ioctx.write(oid, write_bl, write_bl.length(), 0));
+  
+  // Modify head object OMAP
+  const std::string modified_header = "modified_header";
+  const std::string modified_value = "modified_value";
+  bufferlist mod_header_bl;
+  encode(modified_header, mod_header_bl);
+  bufferlist mod_val_bl;
+  encode(modified_value, mod_val_bl);
+  
+  ObjectWriteOperation write_op;
+  write_op.omap_set_header(mod_header_bl);
+  std::map<std::string, bufferlist> modified_omap = {
+    {"key3", mod_val_bl}  // Add new key
+  };
+  write_op.omap_set(modified_omap);
+  ASSERT_EQ(0, ioctx.operate(oid, &write_op));
+  
+  // Verify head has modified OMAP data before rollback
+  bufferlist head_header_bl;
+  int err = 0;
+  ObjectReadOperation read_head;
+  read_head.omap_get_header(&head_header_bl, &err);
+  ASSERT_EQ(0, ioctx.operate(oid, &read_head, nullptr));
+  ASSERT_EQ(0, err);
+  
+  std::string head_header;
+  decode(head_header, head_header_bl);
+  ASSERT_EQ(modified_header, head_header);
+  
+  // Verify head has all three keys
+  std::set<std::string> head_keys;
+  ObjectReadOperation read_head_keys;
+  err = 0;
+  read_head_keys.omap_get_keys2("", LONG_MAX, &head_keys, nullptr, &err);
+  ASSERT_EQ(0, ioctx.operate(oid, &read_head_keys, nullptr));
+  ASSERT_EQ(0, err);
+  ASSERT_EQ(3u, head_keys.size());
+  ASSERT_EQ(1u, head_keys.count("key1"));
+  ASSERT_EQ(1u, head_keys.count("key2"));
+  ASSERT_EQ(1u, head_keys.count("key3"));
+  
+  // Perform rollback to snapshot
+  ASSERT_EQ(0, ioctx.selfmanaged_snap_rollback(oid, my_snaps[0]));
+  
+  // Verify head now has initial OMAP state after rollback
+  bufferlist rolled_header_bl;
+  ObjectReadOperation read_rolled;
+  err = 0;
+  read_rolled.omap_get_header(&rolled_header_bl, &err);
+  ASSERT_EQ(0, ioctx.operate(oid, &read_rolled, nullptr));
+  ASSERT_EQ(0, err);
+  
+  std::string rolled_header;
+  decode(rolled_header, rolled_header_bl);
+  ASSERT_EQ(initial_header, rolled_header);
+  
+  // Verify head has only initial keys (key3 should be gone)
+  std::set<std::string> rolled_keys;
+  ObjectReadOperation read_rolled_keys;
+  err = 0;
+  read_rolled_keys.omap_get_keys2("", LONG_MAX, &rolled_keys, nullptr, &err);
+  ASSERT_EQ(0, ioctx.operate(oid, &read_rolled_keys, nullptr));
+  ASSERT_EQ(0, err);
+  ASSERT_EQ(2u, rolled_keys.size());
+  ASSERT_EQ(1u, rolled_keys.count("key1"));
+  ASSERT_EQ(1u, rolled_keys.count("key2"));
+  ASSERT_EQ(0u, rolled_keys.count("key3"));
+  
+  // Verify values are initial values
+  std::map<std::string, bufferlist> rolled_vals;
+  ObjectReadOperation read_rolled_vals;
+  err = 0;
+  read_rolled_vals.omap_get_vals2("", LONG_MAX, &rolled_vals, nullptr, &err);
+  ASSERT_EQ(0, ioctx.operate(oid, &read_rolled_vals, nullptr));
+  ASSERT_EQ(0, err);
+  ASSERT_EQ(2u, rolled_vals.size());
+  
+  std::string rolled_val1;
+  decode(rolled_val1, rolled_vals["key1"]);
+  ASSERT_EQ(initial_value, rolled_val1);
+  
+  std::string rolled_val2;
+  decode(rolled_val2, rolled_vals["key2"]);
+  ASSERT_EQ(initial_value, rolled_val2);
+  
+  // Cleanup
+  ASSERT_EQ(0, ioctx.selfmanaged_snap_remove(my_snaps.back()));
+}
+
+
 // Instantiate tests for both pool types
 INSTANTIATE_TEST_SUITE_P(, OmapTest,
   ::testing::Values(

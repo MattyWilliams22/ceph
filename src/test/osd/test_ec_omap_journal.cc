@@ -1229,3 +1229,156 @@ TEST(ecomapjournal, iterator_over_multiple_entries)
   
   ASSERT_EQ(3, count);
 }
+
+TEST(ecomapjournal, has_omap_updates_empty_journal)
+{
+  ECOmapJournal journal;
+  const hobject_t test_hoid("test_has_omap_1", CEPH_NOSNAP, 1, 0, "test_namespace");
+  
+  // Empty journal should return false
+  ASSERT_FALSE(journal.has_omap_updates(test_hoid));
+}
+
+TEST(ecomapjournal, has_omap_updates_with_unprocessed_entries)
+{
+  ECOmapJournal journal;
+  const hobject_t test_hoid("test_has_omap_2", CEPH_NOSNAP, 1, 0, "test_namespace");
+  
+  ECOmapJournalEntry entry1(eversion_t(1, 1), false, std::nullopt, {});
+  journal.add_entry(test_hoid, entry1);
+  
+  // Journal with unprocessed entries should return true
+  ASSERT_TRUE(journal.has_omap_updates(test_hoid));
+}
+
+TEST(ecomapjournal, has_omap_updates_with_processed_key_map)
+{
+  ECOmapJournal journal;
+  const hobject_t test_hoid("test_has_omap_3", CEPH_NOSNAP, 1, 0, "test_namespace");
+  
+  // Create an entry with key-value updates
+  std::map<std::string, ceph::buffer::list> key_value;
+  ceph::buffer::list val_bl;
+  encode("test_value", val_bl);
+  key_value["test_key"] = val_bl;
+  ceph::buffer::list map_bl;
+  encode(key_value, map_bl);
+  
+  ECOmapJournalEntry entry1(
+    eversion_t(1, 1), false, std::nullopt,
+    {std::pair(OmapUpdateType::Insert, map_bl)}
+  );
+  journal.add_entry(test_hoid, entry1);
+  
+  // Process entries by calling get_value_updates
+  auto [updates, ranges] = journal.get_value_updates(test_hoid);
+  
+  // Journal with processed key map should return true
+  ASSERT_TRUE(journal.has_omap_updates(test_hoid));
+  ASSERT_FALSE(updates.empty());
+}
+
+TEST(ecomapjournal, has_omap_updates_with_removed_ranges)
+{
+  ECOmapJournal journal;
+  const hobject_t test_hoid("test_has_omap_4", CEPH_NOSNAP, 1, 0, "test_namespace");
+  
+  // Create an entry with range removal
+  std::string range_begin = "key_a";
+  std::string range_end = "key_z";
+  ceph::buffer::list range_bl;
+  encode(range_begin, range_bl);
+  encode(range_end, range_bl);
+  
+  ECOmapJournalEntry entry1(
+    eversion_t(1, 1), false, std::nullopt,
+    {std::pair(OmapUpdateType::RemoveRange, range_bl)}
+  );
+  journal.add_entry(test_hoid, entry1);
+  
+  // Process entries by calling get_value_updates
+  auto [updates, ranges] = journal.get_value_updates(test_hoid);
+  
+  // Journal with removed ranges should return true
+  ASSERT_TRUE(journal.has_omap_updates(test_hoid));
+  ASSERT_FALSE(ranges.empty());
+}
+
+TEST(ecomapjournal, has_omap_updates_with_header)
+{
+  ECOmapJournal journal;
+  const hobject_t test_hoid("test_has_omap_5", CEPH_NOSNAP, 1, 0, "test_namespace");
+  
+  // Create an entry with header update
+  ceph::buffer::list header_bl;
+  encode("test_header", header_bl);
+  
+  ECOmapJournalEntry entry1(eversion_t(1, 1), false, header_bl, {});
+  journal.add_entry(test_hoid, entry1);
+  
+  // Process entries by calling get_updated_header
+  std::optional<ceph::buffer::list> header = journal.get_updated_header(test_hoid);
+  
+  // Journal with header update should return true
+  ASSERT_TRUE(journal.has_omap_updates(test_hoid));
+  ASSERT_TRUE(header.has_value());
+}
+
+TEST(ecomapjournal, has_omap_updates_after_clear)
+{
+  ECOmapJournal journal;
+  const hobject_t test_hoid("test_has_omap_6", CEPH_NOSNAP, 1, 0, "test_namespace");
+  
+  ECOmapJournalEntry entry1(eversion_t(1, 1), false, std::nullopt, {});
+  journal.add_entry(test_hoid, entry1);
+  
+  // Should have updates before clear
+  ASSERT_TRUE(journal.has_omap_updates(test_hoid));
+  
+  journal.clear(test_hoid);
+  
+  // Should not have updates after clear
+  ASSERT_FALSE(journal.has_omap_updates(test_hoid));
+}
+
+TEST(ecomapjournal, has_omap_updates_different_objects)
+{
+  ECOmapJournal journal;
+  const hobject_t test_hoid1("test_has_omap_7a", CEPH_NOSNAP, 1, 0, "test_namespace");
+  const hobject_t test_hoid2("test_has_omap_7b", CEPH_NOSNAP, 1, 0, "test_namespace");
+  
+  ECOmapJournalEntry entry1(eversion_t(1, 1), false, std::nullopt, {});
+  journal.add_entry(test_hoid1, entry1);
+  
+  // Object with entry should return true
+  ASSERT_TRUE(journal.has_omap_updates(test_hoid1));
+  
+  // Different object without entry should return false
+  ASSERT_FALSE(journal.has_omap_updates(test_hoid2));
+}
+
+TEST(ecomapjournal, has_omap_updates_after_remove_entry)
+{
+  ECOmapJournal journal;
+  const hobject_t test_hoid("test_has_omap_8", CEPH_NOSNAP, 1, 0, "test_namespace");
+  
+  ECOmapJournalEntry entry1(eversion_t(1, 1), false, std::nullopt, {});
+  ECOmapJournalEntry entry2(eversion_t(1, 2), false, std::nullopt, {});
+  
+  journal.add_entry(test_hoid, entry1);
+  journal.add_entry(test_hoid, entry2);
+  
+  ASSERT_TRUE(journal.has_omap_updates(test_hoid));
+  
+  // Remove one entry
+  journal.remove_entry(test_hoid, entry1);
+  
+  // Should still have updates (entry2 remains)
+  ASSERT_TRUE(journal.has_omap_updates(test_hoid));
+  
+  // Remove last entry
+  journal.remove_entry(test_hoid, entry2);
+  
+  // Should not have updates after removing all entries
+  ASSERT_FALSE(journal.has_omap_updates(test_hoid));
+}
