@@ -21,6 +21,7 @@
 #include "ECUtil.h"
 #include "os/ObjectStore.h"
 #include "common/inline_variant.h"
+#include "PGLog.h"
 
 using std::less;
 using std::make_pair;
@@ -342,7 +343,7 @@ void ECTransaction::Generate::zero_truncate_to_delete() {
   }
 }
 
-void ECTransaction::Generate::delete_first(ECOmapJournal &ec_omap_journal) {
+void ECTransaction::Generate::delete_first() {
   /* We also want to remove the std::nullopt entries since
    * the keys already won't exist */
   for (auto j = op.attr_updates.begin();
@@ -407,6 +408,24 @@ void ECTransaction::Generate::process_init() {
           ghobject_t(oid, ghobject_t::NO_GEN, shard));
       }
 
+      // Check ECOmapJournal first to see if there are pending omap updates
+      // This avoids costly PG log traversal when not necessary
+      if (ec_omap_journal.has_omap_updates(cop.source)) {
+        // There are incomplete omap updates which need to be applied to the clone
+        eversion_t can_rollback_to = pg_log.get_can_rollback_to();
+        OmapCloneVisitor omap_visitor(transactions, pgid, cop.source, oid, sinfo, ec_omap_journal);
+
+        for (auto &log_entry : get_incomplete_ec_omap_log_entries(cop.source, can_rollback_to)) {
+          // Only apply updates after can_rollback_to version
+          if (log_entry->version > can_rollback_to && log_entry->mod_desc.can_rollback()) {
+            log_entry->mod_desc.visit(&omap_visitor);
+          }
+        }
+        
+        // Apply accumulated omap updates to clone
+        omap_visitor.apply_to_clone();
+      }
+
       if (obc) {
         auto cobciter = t.obc_map.find(cop.source);
         ceph_assert(cobciter != t.obc_map.end());
@@ -458,6 +477,128 @@ void alloc_hint(PGTransaction::ObjectOperation& op,
   }
 }
 
+void ECTransaction::OmapCloneVisitor::ec_omap(
+  bool clear_omap,
+  std::optional<ceph::buffer::list> header,
+  std::vector<std::pair<OmapUpdateType, ceph::buffer::list>> &updates) {
+  
+  // Handle clear_omap flag
+  if (clear_omap) {
+    has_clear_omap = true;
+    omap_updates.clear();
+    removed_ranges.clear();
+    removed_ranges.emplace_back("", std::nullopt); // Remove full range
+  }
+  
+  // Handle omap header
+  if (header) {
+    omap_header = header;
+  }
+  
+  // Handle omap updates
+  for (auto &[type, bl] : updates) {
+    auto p = bl.cbegin();
+    
+    switch (type) {
+      case OmapUpdateType::Insert: {
+        std::map<std::string, ceph::buffer::list> kv_map;
+        decode(kv_map, p);
+        for (auto &[key, value] : kv_map) {
+          omap_updates[key] = value;
+        }
+        break;
+      }
+      case OmapUpdateType::Remove: {
+        std::set<std::string> keys_to_remove;
+        decode(keys_to_remove, p);
+        for (auto &key : keys_to_remove) {
+          omap_updates[key] = std::nullopt;
+        }
+        break;
+      }
+      case OmapUpdateType::RemoveRange: {
+        std::string range_start, range_end;
+        decode(range_start, p);
+        decode(range_end, p);
+        
+        // Add range to list of removed ranges
+        removed_ranges.emplace_back(range_start, range_end);
+        
+        // Mark any keys within range as removed
+        auto map_it = omap_updates.lower_bound(range_start);
+        while (map_it != omap_updates.end()) {
+          if (map_it->first >= range_end) {
+            break;
+          }
+          map_it->second = std::nullopt;
+          ++map_it;
+        }
+        break;
+      }
+    }
+  }
+}
+
+void ECTransaction::OmapCloneVisitor::apply_to_clone() {
+  // Get generation number for destination object
+  const auto [gen, lost_delete] = ec_omap_journal.get_generation(dest_oid);
+  
+  // Apply accumulated omap operations to primary capable shard transactions only
+  for (auto &&[shard, t] : transactions) {
+    // Skip non-primary shards - they don't store omap data
+    if (sinfo.is_nonprimary_shard(shard)) {
+      continue;
+    }
+    
+    coll_t coll(spg_t(pgid, shard));
+    // Use generation number from journal if available, otherwise NO_GEN
+    ghobject_t dest(dest_oid, gen, shard);
+    
+    // Apply clear_omap if needed
+    if (has_clear_omap) {
+      t.omap_clear(coll, dest);
+    }
+    
+    // Apply removed ranges
+    for (auto &[range_start, range_end] : removed_ranges) {
+      if (range_end) {
+        // Remove specific range
+        t.omap_rmkeyrange(coll, dest, range_start, *range_end);
+      } else {
+        // Remove from start to end (full clear if start is empty)
+        t.omap_rmkeyrange(coll, dest, range_start, "");
+      }
+    }
+    
+    // Apply header update if present
+    if (omap_header) {
+      t.omap_setheader(coll, dest, *omap_header);
+    }
+    
+    // Apply key updates
+    if (!omap_updates.empty()) {
+      std::map<std::string, ceph::buffer::list> to_set;
+      std::set<std::string> to_remove;
+      
+      for (auto &[key, val] : omap_updates) {
+        if (val) {
+          to_set[key] = *val;
+        } else {
+          to_remove.insert(key);
+        }
+      }
+      
+      if (!to_set.empty()) {
+        t.omap_setkeys(coll, dest, to_set);
+      }
+      if (!to_remove.empty()) {
+        t.omap_rmkeys(coll, dest, to_remove);
+      }
+    }
+  }
+}
+
+
 ECTransaction::Generate::Generate(PGTransaction &t,
     ErasureCodeInterfaceRef &ec_impl,
     pg_t &pgid,
@@ -471,7 +612,8 @@ ECTransaction::Generate::Generate(PGTransaction &t,
     WritePlanObj &plan,
     DoutPrefixProvider *dpp,
     pg_log_entry_t *entry,
-    ECOmapJournal &ec_omap_journal)
+    ECOmapJournal &ec_omap_journal,
+    const PGLog &pg_log)
   : t(t),
     ec_impl(ec_impl),
     pgid(pgid),
@@ -484,7 +626,9 @@ ECTransaction::Generate::Generate(PGTransaction &t,
     op(op),
     plan(plan),
     read_sem(&sinfo),
-    to_write(&sinfo) {
+    to_write(&sinfo),
+    ec_omap_journal(ec_omap_journal),
+    pg_log(pg_log) {
 
   vector<unsigned> old_transaction_counts(sinfo.get_k_plus_m());
 
@@ -526,7 +670,7 @@ ECTransaction::Generate::Generate(PGTransaction &t,
   }
 
   if (op.delete_first) {
-    delete_first(ec_omap_journal);
+    delete_first();
   }
 
   if (op.is_fresh_object() && entry) {
@@ -1037,7 +1181,8 @@ void ECTransaction::generate_transactions(
     set<hobject_t> *temp_removed,
     DoutPrefixProvider *dpp,
     const OSDMapRef &osdmap,
-    ECOmapJournal &ec_omap_journal) {
+    ECOmapJournal &ec_omap_journal,
+    const PGLog &pg_log) {
   ceph_assert(written_map);
   ceph_assert(transactions);
   ceph_assert(temp_added);
@@ -1070,8 +1215,49 @@ void ECTransaction::generate_transactions(
       ceph_assert(plan.hoid == oid);
 
       Generate generate(t, ec_impl, pgid, sinfo, partial_extents, written_map,
-        *transactions, osdmap, oid, op, plan, dpp, entry, ec_omap_journal);
+        *transactions, osdmap, oid, op, plan, dpp, entry, ec_omap_journal, pg_log);
 
       plans.plans.pop_front();
   });
+}
+
+std::vector<const pg_log_entry_t*> ECTransaction::Generate::get_incomplete_ec_omap_log_entries(
+  const hobject_t &hoid,
+  eversion_t can_rollback_to) {
+  
+  std::vector<const pg_log_entry_t*> result;
+  
+  // Helper visitor to check if a log entry has EC omap updates
+  struct OmapChecker : public ObjectModDesc::Visitor {
+    bool has_omap = false;
+    
+    void ec_omap(
+      bool clear_omap,
+      std::optional<ceph::buffer::list> header,
+      std::vector<std::pair<OmapUpdateType, ceph::buffer::list>> &updates) override {
+      has_omap = true;
+    }
+  };
+  
+  // Iterate through the PG log to find incomplete entries for this object
+  for (const auto &entry : pg_log.get_log().log) {
+    // Filter by object, version, and rollback capability
+    if (entry.soid == hoid &&
+        entry.version > can_rollback_to &&
+        entry.mod_desc.can_rollback()) {
+      
+      // Check if this entry has EC omap updates
+      OmapChecker checker;
+      entry.mod_desc.visit(&checker);
+      if (checker.has_omap) {
+        result.push_back(&entry);
+      }
+    }
+  }
+  
+  ldpp_dout(dpp, 20) << __func__ << ": found " << result.size()
+                     << " incomplete log entries with EC omap updates for " << hoid
+                     << " after version " << can_rollback_to << dendl;
+  
+  return result;
 }

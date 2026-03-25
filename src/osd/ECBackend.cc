@@ -426,8 +426,13 @@ void ECBackend::handle_sub_write(
   // This ensures the journal has the correct generation info when transactions are applied
   if (!get_parent()->pgb_is_primary()) {
     for (auto &&e: op.log_entries) {
-      if (e.is_delete() || e.is_lost_delete()) {
+      if (e.is_delete() || e.is_lost_delete() || (e.is_clone() && !e.soid.is_snap())) {
+        // Track deletes and clones (to non-snap targets) in the journal so we know the generation number
         ec_omap_journal.append_delete(e.soid, e.version.version, e.is_lost_delete());
+        dout(20) << __func__ << " non-primary shard updating journal: "
+                 << (e.is_clone() ? "clone" : "delete")
+                 << " " << e.soid << " version=" << e.version.version
+                 << " lost_delete=" << e.is_lost_delete() << dendl;
       }
     }
   }
@@ -1035,7 +1040,8 @@ struct ECClassicalOp : ECCommon::RMWPipeline::Op {
       &temp_cleared,
       dpp,
       osdmap,
-      pipeline->ec_backend.ec_omap_journal);
+      pipeline->ec_backend.ec_omap_journal,
+      pipeline->get_parent()->get_log());
   }
 
   bool skip_transaction(
