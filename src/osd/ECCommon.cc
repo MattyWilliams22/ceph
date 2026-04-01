@@ -1045,23 +1045,23 @@ void ECCommon::RMWPipeline::finish_rmw(OpRef const &op) {
     if (op->version > get_parent()->get_log().get_can_rollback_to()) {
       dout(20) << __func__ << " cache idle " << op->version << dendl;
       // submit a dummy, transaction-empty op to kick the rollforward
-      const auto tid = get_parent()->get_tid();
-      const auto nop = std::make_shared<ECDummyOp>();
-      nop->hoid = op->hoid;
-      nop->trim_to = op->trim_to;
-      nop->pg_committed_to = op->version;
-      nop->tid = tid;
-      nop->reqid = op->reqid;
-      nop->pending_cache_ops = 1;
-      nop->pipeline = this;
+      // const auto tid = get_parent()->get_tid();
+      // const auto nop = std::make_shared<ECDummyOp>();
+      // nop->hoid = op->hoid;
+      // nop->trim_to = op->trim_to;
+      // nop->pg_committed_to = op->version;
+      // nop->tid = tid;
+      // nop->reqid = op->reqid;
+      // nop->pending_cache_ops = 1;
+      // nop->pipeline = this;
 
-      tid_to_op_map[tid] = nop;
-      waiting_commit.push_back(nop);
+      // tid_to_op_map[tid] = nop;
+      // waiting_commit.push_back(nop);
 
-      /* The cache is idle (we checked above) and this IO never blocks for reads
-       * so we can skip the extent cache and immediately call the completion.
-       */
-      nop->cache_ready(nop->hoid, ECUtil::shard_extent_map_t(&sinfo));
+      // /* The cache is idle (we checked above) and this IO never blocks for reads
+      //  * so we can skip the extent cache and immediately call the completion.
+      //  */
+      // nop->cache_ready(nop->hoid, ECUtil::shard_extent_map_t(&sinfo));
     }
   }
 

@@ -411,9 +411,11 @@ void ECTransaction::Generate::process_init() {
       // Check ECOmapJournal first to see if there are pending omap updates
       // This avoids costly PG log traversal when not necessary
       if (ec_omap_journal.has_omap_updates(cop.source)) {
+        ldpp_dout(dpp, 0) << "MATTY: Journal has omap updates for " << cop.source << dendl;
+
         // There are incomplete omap updates which need to be applied to the clone
         eversion_t can_rollback_to = pg_log.get_can_rollback_to();
-        OmapCloneVisitor omap_visitor(transactions, pgid, cop.source, oid, sinfo, ec_omap_journal);
+        OmapCloneVisitor omap_visitor(transactions, pgid, cop.source, oid, sinfo, ec_omap_journal, dpp);
 
         for (auto &log_entry : get_incomplete_ec_omap_log_entries(cop.source, can_rollback_to)) {
           // Only apply updates after can_rollback_to version
@@ -540,6 +542,26 @@ void ECTransaction::OmapCloneVisitor::ec_omap(
 }
 
 void ECTransaction::OmapCloneVisitor::apply_to_clone() {
+  // Log summary of omap updates being applied to clone
+  size_t keys_to_set = 0;
+  size_t keys_to_remove = 0;
+  for (const auto &[key, val] : omap_updates) {
+    if (val) {
+      keys_to_set++;
+    } else {
+      keys_to_remove++;
+    }
+  }
+
+  ldpp_dout(dpp, 0) << __func__ << " MATTY: Applying omap updates to clone "
+                     << dest_oid << " from " << source_oid
+                     << ": header=" << (omap_header ? "yes" : "no")
+                     << " clear=" << (has_clear_omap ? "yes" : "no")
+                     << " keys_set=" << keys_to_set
+                     << " keys_removed=" << keys_to_remove
+                     << " ranges_removed=" << removed_ranges.size()
+                     << dendl;
+
   // Get generation number for destination object
   const auto [gen, lost_delete] = ec_omap_journal.get_generation(dest_oid);
   

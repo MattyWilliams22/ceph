@@ -95,6 +95,7 @@ private:
   const hobject_t &dest_oid;
   const ECUtil::stripe_info_t &sinfo;
   ECOmapJournal &ec_omap_journal;
+  DoutPrefixProvider *dpp;
   
   // Accumulated omap state
   bool has_clear_omap = false;
@@ -109,9 +110,10 @@ public:
     const hobject_t &src,
     const hobject_t &dst,
     const ECUtil::stripe_info_t &stripe_info,
-    ECOmapJournal &journal)
+    ECOmapJournal &journal,
+    DoutPrefixProvider *dpp_ptr)
     : transactions(txns), pgid(pg), source_oid(src), dest_oid(dst),
-      sinfo(stripe_info), ec_omap_journal(journal) {}
+      sinfo(stripe_info), ec_omap_journal(journal), dpp(dpp_ptr) {}
 
   /**
    * Called by ObjectModDesc::visit() when an ec_omap modification is encountered
