@@ -430,6 +430,8 @@ public:
   void remove_object_header(const std::string &oid)
   {
     ObjectDesc new_obj = get_most_recent(oid);
+    cout_prefix() << "MATTY: TEST: remove_object_header oid=" << oid
+                  << " snap=" << current_snap << " (clearing header)" << std::endl;
     new_obj.header = bufferlist();
     new_obj.dirty = true;
     new_obj.flushed = false;
@@ -440,6 +442,8 @@ public:
   void update_object_header(const std::string &oid, const bufferlist &bl)
   {
     ObjectDesc new_obj = get_most_recent(oid);
+    cout_prefix() << "MATTY: TEST: update_object_header oid=" << oid
+                  << " snap=" << current_snap << " header_size=" << bl.length() << std::endl;
     new_obj.header = bl;
     new_obj.exists = true;
     new_obj.dirty = true;
@@ -586,6 +590,8 @@ public:
     ceph_assert(!get_watch_context(oid));
     ObjectDesc contents;
     find_object(oid, &contents, snap);
+    cout_prefix() << "MATTY: TEST: roll_back oid=" << oid
+                  << " to_snap=" << snap << " header_size=" << contents.header.length() << std::endl;
     contents.dirty = true;
     contents.flushed = false;
     pool_obj_cont.rbegin()->second.insert_or_assign(oid, contents);
@@ -1671,12 +1677,15 @@ public:
 
       // Attributes
       if (!context->no_omap) {
-	if (!(old_value.header == header)) {
-	  std::cerr << num << ": oid " << oid << " header does not match, old size: "
-	       << old_value.header.length() << " new size " << header.length()
-	       << std::endl;
-	  ceph_assert(old_value.header == header);
-	}
+        if (!(old_value.header == header)) {
+          context->cout_prefix() << "MATTY: TEST: read_verify oid=" << oid
+          << " expected_size=" << old_value.header.length()
+          << " actual_size=" << header.length() << " MISMATCH" << std::endl;
+          std::cerr << num << ": oid " << oid << " header does not match, old size: "
+            << old_value.header.length() << " new size " << header.length()
+            << std::endl;
+          ceph_assert(old_value.header == header);
+        }
 	if (omap.size() != old_value.attrs.size()) {
 	  std::cerr << num << ": oid " << oid << " omap.size() is " << omap.size()
 	       << " and old is " << old_value.attrs.size() << std::endl;

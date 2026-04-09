@@ -94,6 +94,9 @@ ECBackend::ECBackend(
    */
   ceph_assert((ec_impl->get_data_chunk_count() *
     ec_impl->get_chunk_size(stripe_width)) == stripe_width);
+  
+  // Set dpp context for ECOmapJournal logging
+  ec_omap_journal.set_dpp(get_parent()->get_dpp());
 }
 
 PGBackend::RecoveryHandle *ECBackend::open_recovery_op() {
@@ -1658,9 +1661,13 @@ int ECBackend::omap_get_header(
   std::optional<ceph::buffer::list> header_from_journal = ec_omap_journal.get_updated_header(oid.hobj);
   if (header_from_journal) {
     *header = *header_from_journal;
+    dout(0) << "MATTY: ECBACKEND: omap_get_header oid=" << oid
+            << " from_journal=true header_size=" << header->length() << dendl;
   } else {
     header->clear();
     store->omap_get_header(c_, oid, header, allow_eio);
+    dout(0) << "MATTY: ECBACKEND: omap_get_header oid=" << oid
+            << " from_journal=false header_size=" << header->length() << dendl;
   }
   return 0;
 }
@@ -1684,6 +1691,11 @@ int ECBackend::omap_get(
   // Update header if present
   if (updated_header) {
     *header = *updated_header;
+    dout(0) << "MATTY: ECBACKEND: omap_get oid=" << oid
+            << " updated_header=true header_size=" << header->length() << dendl;
+  } else {
+    dout(0) << "MATTY: ECBACKEND: omap_get oid=" << oid
+            << " updated_header=false header_size=" << header->length() << dendl;
   }
 
   // Remove keys in removed_ranges

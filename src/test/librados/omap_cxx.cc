@@ -1419,7 +1419,389 @@ TEST_P(OmapTest, CloneRollback) {
   // Cleanup
   ASSERT_EQ(0, ioctx.selfmanaged_snap_remove(my_snaps.back()));
 }
+TEST_P(OmapTest, OmapCopyFrom) {
+  SKIP_IF_CRIMSON();
+  
+  const std::string src_oid = "test_omap_copy_from_src";
+  const std::string dst_oid = "test_omap_copy_from_dst";
+  const std::string dst_oid2 = "test_omap_copy_from_dst2";
+  
+  // Create source object with OMAP data
+  const std::string omap_header = "test_omap_header_for_copy";
+  bufferlist omap_header_bl;
+  encode(omap_header, omap_header_bl);
+  
+  auto omap_map = get_test_omap_data();
+  create_test_object_with_omap(src_oid, omap_map, omap_header_bl);
+  
+  // Get the version of the source object
+  version_t src_version = ioctx.get_last_version();
+  
+  // Test 1: Copy with explicit version
+  {
+    ObjectWriteOperation write_op;
+    write_op.copy_from(src_oid, ioctx, src_version, 0);
+    int ret = ioctx.operate(dst_oid, &write_op);
+    ASSERT_EQ(0, ret);
+    
+    // Verify OMAP header was copied
+    bufferlist header_read;
+    ObjectReadOperation read_header;
+    int err = 0;
+    read_header.omap_get_header(&header_read, &err);
+    ret = ioctx.operate(dst_oid, &read_header, nullptr);
+    ASSERT_EQ(0, ret);
+    ASSERT_EQ(0, err);
+    
+    std::string header_str;
+    decode(header_str, header_read);
+    ASSERT_EQ(omap_header, header_str);
+    
+    // Verify OMAP keys were copied
+    std::set<std::string> keys_read;
+    ObjectReadOperation read_keys;
+    err = 0;
+    read_keys.omap_get_keys2("", LONG_MAX, &keys_read, nullptr, &err);
+    ret = ioctx.operate(dst_oid, &read_keys, nullptr);
+    ASSERT_EQ(0, ret);
+    ASSERT_EQ(0, err);
+    ASSERT_EQ(omap_map.size(), keys_read.size());
+    
+    // Verify all expected keys are present
+    for (const auto& kv : omap_map) {
+      ASSERT_EQ(1u, keys_read.count(kv.first));
+    }
+    
+    // Verify OMAP values were copied correctly
+    std::map<std::string, bufferlist> vals_read;
+    ObjectReadOperation read_vals;
+    err = 0;
+    read_vals.omap_get_vals2("", LONG_MAX, &vals_read, nullptr, &err);
+    ret = ioctx.operate(dst_oid, &read_vals, nullptr);
+    ASSERT_EQ(0, ret);
+    ASSERT_EQ(0, err);
+    ASSERT_EQ(omap_map.size(), vals_read.size());
+    
+    // Verify each value matches the source
+    for (const auto& kv : omap_map) {
+      ASSERT_EQ(1u, vals_read.count(kv.first));
+      ASSERT_TRUE(kv.second.contents_equal(vals_read[kv.first]));
+    }
+    
+    // Verify object data was also copied
+    bufferlist data_read;
+    ObjectReadOperation read_data;
+    read_data.read(0, 4, &data_read, nullptr);
+    ret = ioctx.operate(dst_oid, &read_data, nullptr);
+    ASSERT_EQ(0, ret);
+    ASSERT_EQ(0, memcmp(data_read.c_str(), "ceph", 4));
+  }
+  
+  // Test 2: Copy with version=0 (any version)
+  {
+    ObjectWriteOperation write_op;
+    write_op.copy_from(src_oid, ioctx, 0, 0);
+    int ret = ioctx.operate(dst_oid2, &write_op);
+    ASSERT_EQ(0, ret);
+    
+    // Verify OMAP header was copied
+    bufferlist header_read;
+    ObjectReadOperation read_header;
+    int err = 0;
+    read_header.omap_get_header(&header_read, &err);
+    ret = ioctx.operate(dst_oid2, &read_header, nullptr);
+    ASSERT_EQ(0, ret);
+    ASSERT_EQ(0, err);
+    
+    std::string header_str;
+    decode(header_str, header_read);
+    ASSERT_EQ(omap_header, header_str);
+    
+    // Verify OMAP values were copied correctly
+    std::map<std::string, bufferlist> vals_read;
+    ObjectReadOperation read_vals;
+    err = 0;
+    read_vals.omap_get_vals2("", LONG_MAX, &vals_read, nullptr, &err);
+    ret = ioctx.operate(dst_oid2, &read_vals, nullptr);
+    ASSERT_EQ(0, ret);
+    ASSERT_EQ(0, err);
+    ASSERT_EQ(omap_map.size(), vals_read.size());
+    
+    // Verify each value matches the source
+    for (const auto& kv : omap_map) {
+      ASSERT_EQ(1u, vals_read.count(kv.first));
+      ASSERT_TRUE(kv.second.contents_equal(vals_read[kv.first]));
+    }
+  }
+}
 
+TEST_P(OmapTest, OmapCopyFromOverwritesTarget) {
+  SKIP_IF_CRIMSON();
+  
+  const std::string src_oid = "test_omap_copy_from_src_overwrite";
+  const std::string dst_oid = "test_omap_copy_from_dst_overwrite";
+  
+  // Create source object with OMAP data
+  const std::string src_header = "source_header";
+  bufferlist src_header_bl;
+  encode(src_header, src_header_bl);
+  
+  std::map<std::string, bufferlist> src_omap_map;
+  bufferlist src_val_bl;
+  std::string src_value = "source_value";
+  encode(src_value, src_val_bl);
+  src_omap_map["src_key1"] = src_val_bl;
+  src_omap_map["src_key2"] = src_val_bl;
+  
+  create_test_object_with_omap(src_oid, src_omap_map, src_header_bl);
+  
+  // Capture source version immediately after creation
+  version_t src_version = ioctx.get_last_version();
+  
+  // Create destination object with DIFFERENT OMAP data
+  const std::string dst_header = "destination_header";
+  bufferlist dst_header_bl;
+  encode(dst_header, dst_header_bl);
+  
+  std::map<std::string, bufferlist> dst_omap_map;
+  bufferlist dst_val_bl;
+  std::string dst_value = "destination_value";
+  encode(dst_value, dst_val_bl);
+  dst_omap_map["dst_key1"] = dst_val_bl;
+  dst_omap_map["dst_key2"] = dst_val_bl;
+  dst_omap_map["dst_key3"] = dst_val_bl;
+  
+  create_test_object_with_omap(dst_oid, dst_omap_map, dst_header_bl);
+  
+  // For EC pools, add another OMAP update to destination to ensure it's in the journal
+  if (pool_type == PoolType::FAST_EC) {
+    bufferlist updated_dst_header_bl;
+    std::string updated_dst_header = "updated_destination_header_in_journal";
+    encode(updated_dst_header, updated_dst_header_bl);
+    
+    ObjectWriteOperation update_op;
+    update_op.omap_set_header(updated_dst_header_bl);
+    
+    // Add a new key that should NOT appear after copy_from
+    std::map<std::string, bufferlist> new_dst_keys;
+    bufferlist new_dst_val_bl;
+    std::string new_dst_value = "new_destination_value_in_journal";
+    encode(new_dst_value, new_dst_val_bl);
+    new_dst_keys["dst_key_journal_only"] = new_dst_val_bl;
+    update_op.omap_set(new_dst_keys);
+    
+    int ret = ioctx.operate(dst_oid, &update_op);
+    ASSERT_EQ(0, ret);
+  }
+  
+  // Perform copy_from to overwrite destination with source
+  {
+    ObjectWriteOperation write_op;
+    write_op.copy_from(src_oid, ioctx, src_version, 0);
+    int ret = ioctx.operate(dst_oid, &write_op);
+    ASSERT_EQ(0, ret);
+  }
+  
+  // Verify destination now has SOURCE OMAP header, not destination header
+  {
+    bufferlist header_read;
+    ObjectReadOperation read_header;
+    int err = 0;
+    read_header.omap_get_header(&header_read, &err);
+    int ret = ioctx.operate(dst_oid, &read_header, nullptr);
+    ASSERT_EQ(0, ret);
+    ASSERT_EQ(0, err);
+    
+    std::string header_str;
+    decode(header_str, header_read);
+    ASSERT_EQ(src_header, header_str) << "Destination should have source header, not destination header";
+  }
+  
+  // Verify destination has SOURCE OMAP keys, not destination keys
+  {
+    std::set<std::string> keys_read;
+    ObjectReadOperation read_keys;
+    int err = 0;
+    read_keys.omap_get_keys2("", LONG_MAX, &keys_read, nullptr, &err);
+    int ret = ioctx.operate(dst_oid, &read_keys, nullptr);
+    ASSERT_EQ(0, ret);
+    ASSERT_EQ(0, err);
+    
+    // Should have exactly the source keys
+    ASSERT_EQ(src_omap_map.size(), keys_read.size()) 
+      << "Destination should have " << src_omap_map.size() << " keys from source, not " << keys_read.size();
+    
+    // Verify source keys are present
+    for (const auto& kv : src_omap_map) {
+      ASSERT_EQ(1u, keys_read.count(kv.first)) 
+        << "Source key '" << kv.first << "' should be present in destination";
+    }
+    
+    // Verify destination keys are NOT present
+    ASSERT_EQ(0u, keys_read.count("dst_key1")) 
+      << "Old destination key 'dst_key1' should NOT be present after copy_from";
+    ASSERT_EQ(0u, keys_read.count("dst_key2")) 
+      << "Old destination key 'dst_key2' should NOT be present after copy_from";
+    ASSERT_EQ(0u, keys_read.count("dst_key3")) 
+      << "Old destination key 'dst_key3' should NOT be present after copy_from";
+    
+    // For EC pools, verify journal-only key is NOT present
+    if (pool_type == PoolType::FAST_EC) {
+      ASSERT_EQ(0u, keys_read.count("dst_key_journal_only")) 
+        << "Journal-only destination key should NOT be present after copy_from";
+    }
+  }
+  
+  // Verify destination has SOURCE OMAP values
+  {
+    std::map<std::string, bufferlist> vals_read;
+    ObjectReadOperation read_vals;
+    int err = 0;
+    read_vals.omap_get_vals2("", LONG_MAX, &vals_read, nullptr, &err);
+    int ret = ioctx.operate(dst_oid, &read_vals, nullptr);
+    ASSERT_EQ(0, ret);
+    ASSERT_EQ(0, err);
+    ASSERT_EQ(src_omap_map.size(), vals_read.size());
+    
+    // Verify each source value is present and correct
+    for (const auto& kv : src_omap_map) {
+      ASSERT_EQ(1u, vals_read.count(kv.first));
+      ASSERT_TRUE(kv.second.contents_equal(vals_read[kv.first])) 
+        << "Value for key '" << kv.first << "' should match source value";
+    }
+  }
+}
+
+TEST_P(OmapTest, GenerationalObjectRecovery) {
+  SKIP_IF_CRIMSON();
+  turn_balancing_off();
+  
+  const std::string oid = "gen_recovery_test_oid";
+  
+  // 1. Create object with omap (generation 0/HEAD)
+  std::map<std::string, bufferlist> omap_v1;
+  bufferlist val1;
+  const std::string original_value = "original_generation_value";
+  encode(original_value, val1);
+  omap_v1["test_key"] = val1;
+  
+  bufferlist header1;
+  const std::string original_header = "original_generation_header";
+  encode(original_header, header1);
+  
+  ObjectWriteOperation write1;
+  write1.create(true);  // exclusive create
+  write1.omap_set(omap_v1);
+  write1.omap_set_header(header1);
+  int ret = ioctx.operate(oid, &write1);
+  EXPECT_EQ(ret, 0);
+  
+  std::cout << "Created object with original omap data" << std::endl;
+  
+  // 2. Delete object (creates a generational tombstone)
+  ObjectWriteOperation del_op;
+  del_op.remove();
+  ret = ioctx.operate(oid, &del_op);
+  EXPECT_EQ(ret, 0);
+  
+  std::cout << "Deleted object (generational tombstone created)" << std::endl;
+  
+  // 3. Recreate object with DIFFERENT omap (new HEAD, old gen still exists)
+  std::map<std::string, bufferlist> omap_v2;
+  bufferlist val2;
+  const std::string new_head_value = "new_head_generation_value";
+  encode(new_head_value, val2);
+  omap_v2["test_key"] = val2;
+  
+  bufferlist header2;
+  const std::string new_head_header = "new_head_generation_header";
+  encode(new_head_header, header2);
+  
+  ObjectWriteOperation write2;
+  write2.create(true);
+  write2.omap_set(omap_v2);
+  write2.omap_set_header(header2);
+  ret = ioctx.operate(oid, &write2);
+  EXPECT_EQ(ret, 0);
+  
+  std::cout << "Recreated object with new HEAD omap data" << std::endl;
+  
+  // 4. Get current OSD mapping
+  ceph::messaging::osd::OSDMapReply reply;
+  int res = request_osd_map(oid, &reply);
+  EXPECT_TRUE(res == 0);
+  
+  std::vector<int> prev_up_osds = reply.up;
+  std::string pgid = reply.pgid;
+  print_osd_map("Previous up osds: ", prev_up_osds);
+  
+  // 5. Trigger recovery via upmap IMMEDIATELY (before delete fully completes)
+  std::vector<int> new_up_osds = prev_up_osds;
+  std::swap(new_up_osds[0], new_up_osds[new_up_osds.size() - 1]);
+  int new_primary = new_up_osds[0];
+  
+  std::cout << "Previous primary osd: " << prev_up_osds[0] << std::endl;
+  std::cout << "New primary osd: " << new_primary << std::endl;
+  print_osd_map("Desired up osds: ", new_up_osds);
+  
+  int rc = set_osd_upmap(pgid, new_up_osds);
+  EXPECT_TRUE(rc == 0);
+  
+  std::cout << "Set new upmap to trigger recovery" << std::endl;
+  
+  // 6. Wait for recovery to complete
+  int res2 = wait_for_upmap(oid, new_primary, 60s);
+  EXPECT_TRUE(res2 == 0);
+  
+  std::cout << "Recovery completed" << std::endl;
+  
+  // 7. Read omap - verify we got the NEW head value, not old generation
+  // If the bug exists, recovery might have retrieved data from wrong generation
+  std::map<std::string, bufferlist> result_omap;
+  std::set<std::string> keys{"test_key"};
+  ObjectReadOperation read_op;
+  int err = 0;
+  read_op.omap_get_vals_by_keys(keys, &result_omap, &err);
+  ret = ioctx.operate(oid, &read_op, nullptr);
+  EXPECT_EQ(ret, 0);
+  EXPECT_EQ(err, 0);
+  
+  ASSERT_EQ(1u, result_omap.size());
+  ASSERT_TRUE(result_omap.count("test_key") > 0);
+  
+  std::string result_val;
+  decode(result_val, result_omap["test_key"]);
+  
+  std::cout << "Retrieved omap value: " << result_val << std::endl;
+  std::cout << "Expected value: " << new_head_value << std::endl;
+  
+  // This assertion will FAIL if the bug exists and wrong generation was recovered
+  EXPECT_EQ(result_val, new_head_value) 
+    << "ERROR: Recovered wrong generation! Got '" << result_val 
+    << "' but expected '" << new_head_value << "'";
+  
+  // 8. Also verify omap header
+  bufferlist result_header;
+  ObjectReadOperation read_header_op;
+  err = 0;
+  read_header_op.omap_get_header(&result_header, &err);
+  ret = ioctx.operate(oid, &read_header_op, nullptr);
+  EXPECT_EQ(ret, 0);
+  EXPECT_EQ(err, 0);
+  
+  std::string result_header_str;
+  decode(result_header_str, result_header);
+  
+  std::cout << "Retrieved omap header: " << result_header_str << std::endl;
+  std::cout << "Expected header: " << new_head_header << std::endl;
+  
+  // This assertion will FAIL if the bug exists and wrong generation header was recovered
+  EXPECT_EQ(result_header_str, new_head_header)
+    << "ERROR: Recovered wrong generation header! Got '" << result_header_str
+    << "' but expected '" << new_head_header << "'";
+  
+  turn_balancing_on();
+}
 
 // Instantiate tests for both pool types
 INSTANTIATE_TEST_SUITE_P(, OmapTest,

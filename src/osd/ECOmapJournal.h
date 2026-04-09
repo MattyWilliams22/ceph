@@ -107,7 +107,7 @@ class ECOmapJournal {
   using RangeMapType = std::map<std::string, std::optional<std::string>>;
   using const_iterator = std::list<ECOmapJournalEntry>::const_iterator;
  private:
-  // Unprocessed journal entries 
+  // Unprocessed journal entries
   std::map<hobject_t, std::list<ECOmapJournalEntry>> entries;
 
   // Processed journal entries
@@ -118,6 +118,9 @@ class ECOmapJournal {
   // Contains the set of versions and lost object booleans corresponding to
   // outstanding deletes for that ob
   std::map<hobject_t, std::map<version_t, bool>> object_state_map;
+
+  // Dout context for logging
+  const DoutPrefixProvider *dpp = nullptr;
 
   // Function to get specific object's unprocessed entries
   std::list<ECOmapJournalEntry>& get_entries(const hobject_t &hoid);
@@ -133,6 +136,7 @@ class ECOmapJournal {
   RangeMapType get_removed_ranges(const hobject_t &hoid);
 
  public:
+  void set_dpp(const DoutPrefixProvider *dpp_) { dpp = dpp_; }
   void add_entry(const hobject_t &hoid, const ECOmapJournalEntry &entry);
   bool remove_entry(const hobject_t &hoid, const ECOmapJournalEntry &entry);
   bool remove_entry_by_version(const hobject_t &hoid, const eversion_t version);

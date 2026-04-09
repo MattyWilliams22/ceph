@@ -413,7 +413,7 @@ void ECTransaction::Generate::process_init() {
       if (ec_omap_journal.has_omap_updates(cop.source)) {
         // There are incomplete omap updates which need to be applied to the clone
         eversion_t can_rollback_to = pg_log.get_can_rollback_to();
-        OmapCloneVisitor omap_visitor(transactions, pgid, cop.source, oid, sinfo, ec_omap_journal);
+        OmapCloneVisitor omap_visitor(transactions, pgid, cop.source, oid, sinfo, ec_omap_journal, dpp);
 
         for (auto &log_entry : get_incomplete_ec_omap_log_entries(cop.source, can_rollback_to)) {
           // Only apply updates after can_rollback_to version
@@ -481,6 +481,10 @@ void ECTransaction::OmapCloneVisitor::ec_omap(
   bool clear_omap,
   std::optional<ceph::buffer::list> header,
   std::vector<std::pair<OmapUpdateType, ceph::buffer::list>> &updates) {
+  
+  ldpp_dout(dpp, 0) << "MATTY: ECTRANS: clone_visitor src=" << source_oid
+          << " dest=" << dest_oid << " clear_omap=" << clear_omap
+          << " header_size=" << (header ? header->length() : 0) << dendl;
   
   // Handle clear_omap flag
   if (clear_omap) {
@@ -572,6 +576,8 @@ void ECTransaction::OmapCloneVisitor::apply_to_clone() {
     
     // Apply header update if present
     if (omap_header) {
+      ldpp_dout(dpp, 0) << "MATTY: ECTRANS: omap_setheader dest=" << dest
+              << " header_size=" << omap_header->length() << " (writing to clone)" << dendl;
       t.omap_setheader(coll, dest, *omap_header);
     }
     

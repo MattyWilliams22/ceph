@@ -71,12 +71,20 @@ void ECOmapRemovedRanges::clear_omap() {
 
 void ECOmapHeader::update_header(const eversion_t new_version,
   std::optional<ceph::buffer::list> new_header) {
+  // Note: ECOmapHeader doesn't have dpp context, logging moved to ECOmapJournal methods
   this->version = new_version;
   this->header = std::move(new_header);
 }
 
 
 void ECOmapJournal::add_entry(const hobject_t &hoid, const ECOmapJournalEntry &entry) {
+  if (dpp) {
+    ldpp_dout(dpp, 0) << "MATTY: JOURNAL: add_entry hoid=" << hoid
+                      << " version=" << entry.version
+                      << " clear_omap=" << entry.clear_omap
+                      << " header_size=" << (entry.omap_header ? entry.omap_header->length() : 0)
+                      << dendl;
+  }
   entries[hoid].push_back(entry);
 }
 
@@ -87,6 +95,10 @@ bool ECOmapJournal::remove_entry(const hobject_t &hoid, const ECOmapJournalEntry
     auto &entry_list = it_map->second;
     for (const auto& an_entry : entry_list) {
       if (an_entry.version == entry.version) {
+        if (dpp) {
+          ldpp_dout(dpp, 0) << "MATTY: JOURNAL: remove_entry hoid=" << hoid
+                            << " version=" << entry.version << " found=true" << dendl;
+        }
         entry_list.remove(an_entry);
         if (const auto header_it = header_map.find(hoid);
           header_it != header_map.end() &&
@@ -96,6 +108,10 @@ bool ECOmapJournal::remove_entry(const hobject_t &hoid, const ECOmapJournalEntry
         return true;
       }
     }
+  }
+  if (dpp) {
+    ldpp_dout(dpp, 0) << "MATTY: JOURNAL: remove_entry hoid=" << hoid
+                      << " version=" << entry.version << " found=false" << dendl;
   }
 
   // Attempt to remove entry from processed entries
@@ -221,6 +237,11 @@ ECOmapJournal::get_value_updates(const hobject_t &hoid) {
 }
 
 void ECOmapJournal::process_entries(const hobject_t &hoid) {
+  auto entry_list = get_entries(hoid);
+  if (dpp) {
+    ldpp_dout(dpp, 0) << "MATTY: JOURNAL: process_entries hoid=" << hoid
+                      << " processing " << entry_list.size() << " entries" << dendl;
+  }
   for (auto entry_iter = begin_entries(hoid);
         entry_iter != end_entries(hoid); ++entry_iter) {
     ECOmapRemovedRanges removed_ranges(entry_iter->version);

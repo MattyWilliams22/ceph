@@ -8124,10 +8124,12 @@ int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
       ++ctx->num_write;
       result = 0;
       {
-	maybe_create_new_object(ctx);
-	t->omap_setheader(soid, osd_op.indata);
-	ctx->clean_regions.mark_omap_dirty();
-	ctx->delta_stats.num_wr++;
+ maybe_create_new_object(ctx);
+ dout(0) << "MATTY: PRIMARY: omap_setheader soid=" << soid
+         << " header_size=" << osd_op.indata.length() << dendl;
+ t->omap_setheader(soid, osd_op.indata);
+ ctx->clean_regions.mark_omap_dirty();
+ ctx->delta_stats.num_wr++;
       }
       obs.oi.set_flag(object_info_t::FLAG_OMAP);
       obs.oi.clear_omap_digest();
@@ -8147,6 +8149,8 @@ int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	  break;
 	}
 	if (oi.is_omap()) {
+	  dout(0) << "MATTY: PRIMARY: omap_clear soid=" << soid
+	          << " (header will be cleared)" << dendl;
 	  t->omap_clear(soid);
 	  ctx->clean_regions.mark_omap_dirty();
 	  ctx->delta_stats.num_wr++;

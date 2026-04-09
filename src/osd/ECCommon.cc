@@ -1043,23 +1043,23 @@ void ECCommon::RMWPipeline::finish_rmw(OpRef const &op) {
     if (op->version > get_parent()->get_log().get_can_rollback_to()) {
       dout(20) << __func__ << " cache idle " << op->version << dendl;
       // submit a dummy, transaction-empty op to kick the rollforward
-      const auto tid = get_parent()->get_tid();
-      const auto nop = std::make_shared<ECDummyOp>();
-      nop->hoid = op->hoid;
-      nop->trim_to = op->trim_to;
-      nop->pg_committed_to = op->version;
-      nop->tid = tid;
-      nop->reqid = op->reqid;
-      nop->pending_cache_ops = 1;
-      nop->pipeline = this;
+      // const auto tid = get_parent()->get_tid();
+      // const auto nop = std::make_shared<ECDummyOp>();
+      // nop->hoid = op->hoid;
+      // nop->trim_to = op->trim_to;
+      // nop->pg_committed_to = op->version;
+      // nop->tid = tid;
+      // nop->reqid = op->reqid;
+      // nop->pending_cache_ops = 1;
+      // nop->pipeline = this;
 
-      tid_to_op_map[tid] = nop;
-      waiting_commit.push_back(nop);
+      // tid_to_op_map[tid] = nop;
+      // waiting_commit.push_back(nop);
 
-      /* The cache is idle (we checked above) and this IO never blocks for reads
-       * so we can skip the extent cache and immediately call the completion.
-       */
-      nop->cache_ready(nop->hoid, ECUtil::shard_extent_map_t(&sinfo));
+      // /* The cache is idle (we checked above) and this IO never blocks for reads
+      //  * so we can skip the extent cache and immediately call the completion.
+      //  */
+      // nop->cache_ready(nop->hoid, ECUtil::shard_extent_map_t(&sinfo));
     }
   }
 
@@ -1174,9 +1174,12 @@ void ECCommon::RecoveryBackend::handle_recovery_push(
       tobj,
       op.attrset);
     if (get_parent()->get_pool().supports_omap()) {
+      dout(0) << "MATTY: ECCOMMON: recovery_omap_clear tobj=" << tobj << dendl;
       m->t.omap_clear(
         coll,
         tobj);
+      dout(0) << "MATTY: ECCOMMON: recovery_omap_setheader tobj=" << tobj
+              << " header_size=" << op.omap_header.length() << dendl;
       m->t.omap_setheader(
         coll,
         tobj,
@@ -1534,14 +1537,29 @@ void ECCommon::RecoveryBackend::continue_recovery_op(
       bool found_omap_shard = false;
       for (const auto shard : have) {
         if (!sinfo.is_nonprimary_shard(shard)) {
+          const pg_missing_t &missing = get_parent()->get_shard_missing(pg_shards[shard]);
+          auto miter = missing.get_items().find(op.hoid);
+          if (miter != missing.get_items().end() && miter->second.clean_regions.omap_is_dirty()) {
+            dout(20) << __func__ << ": skipping shard " << shard
+                     << " for " << op.hoid << " due to dirty omap" << dendl;
+            continue;  // Skip shards with dirty/stale omap
+          }
           shard_read_t shard_read;
           shard_read.pg_shard = pg_shards[shard];
           read_request.shard_reads.insert(shard, shard_read);
           found_omap_shard = true;
+          dout(10) << __func__ << ": selected shard " << shard
+                   << " for omap read of " << op.hoid << dendl;
           break;
         }
       }
-      ceph_assert(found_omap_shard);
+      if (!found_omap_shard) {
+        dout(0) << __func__ << ": ERROR: no shard with clean omap found for "
+                << op.hoid << ", canceling recovery" << dendl;
+        get_parent()->cancel_pull(op.hoid);
+        recovery_ops.erase(op.hoid);
+        return;
+      }
       if (read_request.shard_reads.empty()) {
         ceph_assert(op.obc);
         /* This can happen for several reasons
