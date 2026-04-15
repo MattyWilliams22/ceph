@@ -337,12 +337,12 @@ void PGBackend::rollback(
   t->append(vis.t);
 }
 
-struct Trimmer : public ObjectModDesc::Visitor {
+struct TrimmerPostRemove : public ObjectModDesc::Visitor {
   const hobject_t &soid;
   PGBackend *pg;
   ObjectStore::Transaction *t;
   const pg_log_entry_t &entry;
-  Trimmer(
+  TrimmerPostRemove(
     PGBackend *pg,
     ObjectStore::Transaction *t,
     const pg_log_entry_t &entry)
@@ -382,9 +382,17 @@ struct Trimmer : public ObjectModDesc::Visitor {
       }
     }
   }
+};
 
-  void ec_omap(bool clear_omap, std::optional<ceph::buffer::list> omap_header, 
-    std::vector<std::pair<OmapUpdateType, ceph::buffer::list>> &omap_updates) override {
+struct Trimmer : TrimmerPostRemove {
+  Trimmer(
+    PGBackend *pg,
+    ObjectStore::Transaction *t,
+    const pg_log_entry_t &entry)
+    : TrimmerPostRemove(pg, t, entry) {}
+  void ec_omap(bool clear_omap, std::optional<ceph::buffer::list> omap_header,
+    std::vector<std::pair<OmapUpdateType, ceph::buffer::list>> &omap_updates) override
+  {
     ceph_assert(pg->get_parent()->get_pool().allows_ecoptimizations());
     ceph_assert(pg->get_parent()->get_pool().supports_omap());
 
@@ -425,24 +433,24 @@ struct Trimmer : public ObjectModDesc::Visitor {
 
         for (auto &&up: omap_updates) {
           switch (up.first) {
-            case OmapUpdateType::Remove:
-              t->omap_rmkeys(
-                coll_t(spg),
-                ghobject_t(soid, gen, shard),
-                up.second);
-              break;
-            case OmapUpdateType::Insert:
-              t->omap_setkeys(
-                coll_t(spg),
-                ghobject_t(soid, gen, shard),
-                up.second);
-              break;
-            case OmapUpdateType::RemoveRange:
-              t->omap_rmkeyrange(
-                coll_t(spg),
-                ghobject_t(soid, gen, shard),
-                up.second);
-              break;
+          case OmapUpdateType::Remove:
+            t->omap_rmkeys(
+              coll_t(spg),
+              ghobject_t(soid, gen, shard),
+              up.second);
+            break;
+          case OmapUpdateType::Insert:
+            t->omap_setkeys(
+              coll_t(spg),
+              ghobject_t(soid, gen, shard),
+              up.second);
+            break;
+          case OmapUpdateType::RemoveRange:
+            t->omap_rmkeyrange(
+              coll_t(spg),
+              ghobject_t(soid, gen, shard),
+              up.second);
+            break;
           }
         }
       }
@@ -479,6 +487,16 @@ void PGBackend::trim(
   if (!entry.can_rollback())
     return;
   Trimmer trimmer(this, t, entry);
+  entry.mod_desc.visit(&trimmer);
+}
+
+void PGBackend::trim_after_remove(
+  const pg_log_entry_t &entry,
+  ObjectStore::Transaction *t)
+{
+  if (!entry.can_rollback())
+    return;
+  TrimmerPostRemove trimmer(this, t, entry);
   entry.mod_desc.visit(&trimmer);
 }
 

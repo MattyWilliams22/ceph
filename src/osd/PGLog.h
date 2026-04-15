@@ -147,6 +147,8 @@ struct PGLog : DoutPrefixProvider {
       const pg_log_entry_t &entry) = 0;
     virtual void trim(
       const pg_log_entry_t &entry) = 0;
+    virtual void trim_after_remove(
+      const pg_log_entry_t &entry) = 0;
     virtual void remove(
       const hobject_t &hoid) = 0;
     virtual void try_stash(
@@ -1210,7 +1212,7 @@ protected:
 	  rollbacker->remove(hoid);
 	}
 	for (auto &&i: entries) {
-	  rollbacker->trim(i);
+	  rollbacker->trim_after_remove(i);
 	}
       }
       return;
@@ -1231,7 +1233,7 @@ protected:
 	  rollbacker->remove(hoid);
 	}
 	for (auto &&i: entries) {
-	  rollbacker->trim(i);
+	  rollbacker->trim_after_remove(i);
 	}
       }
       return;
@@ -1308,7 +1310,7 @@ protected:
 	if (!object_not_in_store)
 	  rollbacker->remove(hoid);
 	for (auto &&i: entries) {
-	  rollbacker->trim(i);
+	  rollbacker->trim_after_remove(i);
 	}
       }
       missing.add(hoid, prior_version, eversion_t(), false);
