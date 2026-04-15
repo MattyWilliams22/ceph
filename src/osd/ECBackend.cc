@@ -577,7 +577,7 @@ void ECBackend::handle_sub_read(
        i != op.attrs_to_read.end();
        ++i) {
     dout(10) << __func__ << ": fulfilling attr request on "
-	     << *i << dendl;
+      << *i << dendl;
     if (reply->errors.contains(*i))
       continue;
     int r = switcher->store->getattrs(
@@ -590,32 +590,33 @@ void ECBackend::handle_sub_read(
       reply->attrs_read.erase(*i);
       reply->buffers_read.erase(*i);
       reply->errors[*i] = r;
+      continue;
     }
-  }
 
-  // Check which objects actually have omap by examining the OI_ATTR
-  std::set<hobject_t> objects_with_omap;
-  for (const auto& [hoid, attrs] : reply->attrs_read) {
-    auto oi_iter = attrs.find(OI_ATTR);
-    if (oi_iter != attrs.end()) {
+    if (!op.omap_headers_to_read.contains(*i)) {
+      continue;
+    }
+
+    auto oi_iter = reply->attrs_read[*i].find(OI_ATTR);
+    if (oi_iter == reply->attrs_read[*i].end()) {
+      continue;
+    }
+
+    try {
       object_info_t oi;
-      try {
-        auto p = oi_iter->second.cbegin();
-        decode(oi, p);
-        if (oi.is_omap()) {
-          objects_with_omap.insert(hoid);
-          dout(20) << __func__ << ": object " << hoid
-                   << " has omap flag set" << dendl;
-        } else {
-          dout(20) << __func__ << ": object " << hoid
-                   << " has no omap flag, skipping omap read" << dendl;
-        }
-      } catch (ceph::buffer::error& e) {
-        dout(5) << __func__ << ": failed to decode OI for " << hoid
-                << ": " << e.what() << dendl;
-        // If we can't decode, assume omap might exist (safe default)
-        objects_with_omap.insert(hoid);
+      auto p = oi_iter->second.cbegin();
+      decode(oi, p);
+      if (!oi.is_omap()) {
+        reply->omaps_complete[*i] = true;
+        dout(20) << __func__ << ": object " << *i
+                 << " has no omap flag, skipping omap read" << dendl;
+      } else {
+        dout(20) << __func__ << ": object " << *i
+                 << " has omap flag set" << dendl;
       }
+    } catch (ceph::buffer::error& e) {
+      dout(5) << __func__ << ": failed to decode OI for " << *i
+              << ": " << e.what() << dendl;
     }
   }
 
@@ -628,8 +629,8 @@ void ECBackend::handle_sub_read(
       continue;
     }
 
-    // Skip if object doesn't have omap flag
-    if (!objects_with_omap.contains(*i)) {
+    // Skip if attrs already proved omap processing is complete.
+    if (reply->omaps_complete.contains(*i) && reply->omaps_complete[*i]) {
       dout(10) << __func__ << ": skipping omap header read for " << *i
                << " (no omap flag)" << dendl;
       continue;
@@ -656,11 +657,10 @@ void ECBackend::handle_sub_read(
     if (reply->errors.contains(hoid))
       continue;
 
-    // Skip if object doesn't have omap flag
-    if (!objects_with_omap.contains(hoid)) {
+    // Skip if attrs already proved omap processing is complete.
+    if (reply->omaps_complete.contains(hoid) && reply->omaps_complete[hoid]) {
       dout(10) << __func__ << ": skipping omap entries read for " << hoid
                << " (no omap flag)" << dendl;
-      reply->omaps_complete[hoid] = true;  // Mark as complete since there's no omap
       continue;
     }
 
