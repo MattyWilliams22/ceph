@@ -357,7 +357,8 @@ int ECCommon::ReadPipeline::get_remaining_shards(
     read_result_t &read_result,
     read_request_t &read_request,
     const bool for_recovery,
-    bool want_attrs) {
+    bool want_attrs,
+    bool want_omap_header) {
   set<pg_shard_t> error_shards;
   for (auto &shard: std::views::keys(read_result.errors)) {
     error_shards.insert(shard);
@@ -378,8 +379,9 @@ int ECCommon::ReadPipeline::get_remaining_shards(
     return -EIO;
   }
 
-  bool need_attr_request = want_attrs;
+  bool need_attr_request = want_attrs || want_omap_header;
   read_request.want_attrs = want_attrs;
+  read_request.want_omap_header = want_omap_header;
 
   // Rather than repeating whole read, we can remove everything we already have.
   for (auto iter = read_request.shard_reads.begin();
@@ -780,11 +782,19 @@ int ECCommon::ReadPipeline::send_all_remaining_reads(
     dout(10) << __func__ << " want attrs again" << dendl;
   }
 
+  // Check if we need to read omap_header again
+  const bool want_omap_header =
+      rop.to_read.at(hoid).want_omap_header &&
+      !rop.complete.at(hoid).omap_header;
+  if (want_omap_header) {
+    dout(10) << __func__ << " want omap_header again" << dendl;
+  }
+
   read_request_t &read_request = rop.to_read.at(hoid);
   // reset the old shard reads, we are going to read them again.
   read_request.shard_reads.clear();
   return get_remaining_shards(hoid, rop.complete.at(hoid), read_request,
-                              rop.for_recovery, want_attrs);
+                              rop.for_recovery, want_attrs, want_omap_header);
 }
 
 void ECCommon::ReadPipeline::kick_reads() {
@@ -1043,23 +1053,23 @@ void ECCommon::RMWPipeline::finish_rmw(OpRef const &op) {
     if (op->version > get_parent()->get_log().get_can_rollback_to()) {
       dout(20) << __func__ << " cache idle " << op->version << dendl;
       // submit a dummy, transaction-empty op to kick the rollforward
-      // const auto tid = get_parent()->get_tid();
-      // const auto nop = std::make_shared<ECDummyOp>();
-      // nop->hoid = op->hoid;
-      // nop->trim_to = op->trim_to;
-      // nop->pg_committed_to = op->version;
-      // nop->tid = tid;
-      // nop->reqid = op->reqid;
-      // nop->pending_cache_ops = 1;
-      // nop->pipeline = this;
+      const auto tid = get_parent()->get_tid();
+      const auto nop = std::make_shared<ECDummyOp>();
+      nop->hoid = op->hoid;
+      nop->trim_to = op->trim_to;
+      nop->pg_committed_to = op->version;
+      nop->tid = tid;
+      nop->reqid = op->reqid;
+      nop->pending_cache_ops = 1;
+      nop->pipeline = this;
 
-      // tid_to_op_map[tid] = nop;
-      // waiting_commit.push_back(nop);
+      tid_to_op_map[tid] = nop;
+      waiting_commit.push_back(nop);
 
-      // /* The cache is idle (we checked above) and this IO never blocks for reads
-      //  * so we can skip the extent cache and immediately call the completion.
-      //  */
-      // nop->cache_ready(nop->hoid, ECUtil::shard_extent_map_t(&sinfo));
+      /* The cache is idle (we checked above) and this IO never blocks for reads
+       * so we can skip the extent cache and immediately call the completion.
+       */
+      nop->cache_ready(nop->hoid, ECUtil::shard_extent_map_t(&sinfo));
     }
   }
 
@@ -1324,6 +1334,13 @@ void ECCommon::RecoveryBackend::handle_recovery_read_complete(
 #endif
     if (empty_obc) {
       update_object_size_after_read(op.recovery_info.size, res, req);
+      
+      // Check if object has omap flag - if not, mark omap_complete
+      if (op.obc && !op.obc->obs.oi.is_omap()) {
+        op.recovery_progress.omap_complete = true;
+        dout(10) << __func__ << ": object " << hoid
+                 << " has no omap flag, marking omap_complete" << dendl;
+      }
     }
   }
   ceph_assert(op.xattrs.size());
@@ -1338,9 +1355,9 @@ void ECCommon::RecoveryBackend::handle_recovery_read_complete(
     }
     op.recovery_info.num_omap_keys += res.omap_entries->size();
     op.omap_entries = std::move(res.omap_entries);
-    if (res.omap_complete) {
-      op.recovery_progress.omap_complete = true;
-    }
+  }
+  if (res.omap_complete) {
+    op.recovery_progress.omap_complete = true;
   }
 
   op.returned_data.emplace(std::move(res.buffers_read));
@@ -1504,7 +1521,7 @@ void ECCommon::RecoveryBackend::continue_recovery_op(
       const auto want_omap_header = (op.recovery_progress.first && !op.recovery_progress.omap_complete)
                                       ? WantOmapHeader::Yes
                                       : WantOmapHeader::No;
-      const auto want_omap_keys = (!op.recovery_progress.omap_complete)
+      const auto want_omap_keys = !op.recovery_progress.omap_complete
                                     ? WantOmapKeys::Yes
                                     : WantOmapKeys::No;
       const auto chunk_size = op.obc ? op.obc->obs.oi.size : get_recovery_chunk_size();
@@ -1735,6 +1752,7 @@ ECCommon::RecoveryBackend::recover_object(
     }
   }
   bool omap_dirty_in_missing = false;
+  bool omap_shard_missing = false;
   for (set<pg_shard_t>::const_iterator i =
          get_parent()->get_acting_recovery_backfill_shards().begin();
        i != get_parent()->get_acting_recovery_backfill_shards().end();
@@ -1748,13 +1766,23 @@ ECCommon::RecoveryBackend::recover_object(
       if (it->second.clean_regions.omap_is_dirty()) {
         omap_dirty_in_missing = true;
       }
+      if (!sinfo.is_nonprimary_shard(i->shard)) {
+        omap_shard_missing = true;
+      }
     }
   }
   if (!sinfo.supports_ec_optimisations()) {
     op.recovery_progress.omap_complete = true;
   } else {
-    op.recovery_progress.omap_complete = !(op.recovery_info.oi.is_omap()
-                                            || omap_dirty_in_missing);
+    if (!obc) {
+      op.recovery_progress.omap_complete = false;
+    } else {
+      op.recovery_progress.omap_complete = !(
+        op.recovery_info.oi.is_omap()
+        || omap_dirty_in_missing
+        || omap_shard_missing
+      );
+    }
     if (!op.recovery_progress.omap_complete) {
       ceph_assert(get_parent()->get_pool().supports_omap());
     }

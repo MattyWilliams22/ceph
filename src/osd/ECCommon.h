@@ -456,7 +456,8 @@ struct ECCommon {
         read_result_t &read_result,
         read_request_t &read_request,
         bool for_recovery,
-        bool want_attrs);
+        bool want_attrs,
+        bool want_omap_header);
 
     void get_all_avail_shards(
         const hobject_t &hoid,

@@ -592,6 +592,33 @@ void ECBackend::handle_sub_read(
       reply->errors[*i] = r;
     }
   }
+
+  // Check which objects actually have omap by examining the OI_ATTR
+  std::set<hobject_t> objects_with_omap;
+  for (const auto& [hoid, attrs] : reply->attrs_read) {
+    auto oi_iter = attrs.find(OI_ATTR);
+    if (oi_iter != attrs.end()) {
+      object_info_t oi;
+      try {
+        auto p = oi_iter->second.cbegin();
+        decode(oi, p);
+        if (oi.is_omap()) {
+          objects_with_omap.insert(hoid);
+          dout(20) << __func__ << ": object " << hoid
+                   << " has omap flag set" << dendl;
+        } else {
+          dout(20) << __func__ << ": object " << hoid
+                   << " has no omap flag, skipping omap read" << dendl;
+        }
+      } catch (ceph::buffer::error& e) {
+        dout(5) << __func__ << ": failed to decode OI for " << hoid
+                << ": " << e.what() << dendl;
+        // If we can't decode, assume omap might exist (safe default)
+        objects_with_omap.insert(hoid);
+      }
+    }
+  }
+
   for (set<hobject_t>::iterator i = op.omap_headers_to_read.begin();
        i != op.omap_headers_to_read.end();
        ++i) {
@@ -600,6 +627,14 @@ void ECBackend::handle_sub_read(
     if (reply->errors.contains(*i)) {
       continue;
     }
+
+    // Skip if object doesn't have omap flag
+    if (!objects_with_omap.contains(*i)) {
+      dout(10) << __func__ << ": skipping omap header read for " << *i
+               << " (no omap flag)" << dendl;
+      continue;
+    }
+
     int r = omap_get_header(
       switcher->ch,
       ghobject_t(*i, ghobject_t::NO_GEN, shard),
@@ -621,6 +656,14 @@ void ECBackend::handle_sub_read(
     if (reply->errors.contains(hoid))
       continue;
 
+    // Skip if object doesn't have omap flag
+    if (!objects_with_omap.contains(hoid)) {
+      dout(10) << __func__ << ": skipping omap entries read for " << hoid
+               << " (no omap flag)" << dendl;
+      reply->omaps_complete[hoid] = true;  // Mark as complete since there's no omap
+      continue;
+    }
+
     std::map<std::string, ceph::buffer::list> current_batch;
     reply->omaps_complete[hoid] = false;
 
@@ -636,12 +679,12 @@ void ECBackend::handle_sub_read(
       (std::string_view key, std::string_view value) {
         const auto num_new_bytes = key.size() + value.size();
         if (auto cur_num_entries = current_batch.size(); cur_num_entries > 0) {
-	  if (max_entries > 0 && cur_num_entries >= max_entries) {
+          if (max_entries > 0 && cur_num_entries >= max_entries) {
             return ObjectStore::omap_iter_ret_t::STOP;
-	  }
-	  if (num_new_bytes >= available) {
+          }
+          if (num_new_bytes >= available) {
             return ObjectStore::omap_iter_ret_t::STOP;
-	  }
+          }
         }
         bufferlist val_bl;
         val_bl.append(value);
@@ -874,7 +917,8 @@ void ECBackend::handle_sub_read_reply(
       }
 
       int err = -EIO; // If attributes needed but not read.
-      if (!rop.to_read.at(oid).want_attrs || rop.complete.at(oid).attrs) {
+      if ((!rop.to_read.at(oid).want_attrs || rop.complete.at(oid).attrs) &&
+          (!rop.to_read.at(oid).want_omap_header || rop.complete.at(oid).omap_header)) {
         err = ec_impl->minimum_to_decode(want_to_read, have, dummy_minimum,
                                                     nullptr);
       }
@@ -927,6 +971,7 @@ void ECBackend::handle_sub_read_reply(
         // uncompleted objects
         rop.to_read.at(oid).shard_reads.clear();
         rop.to_read.at(oid).want_attrs = false;
+        rop.to_read.at(oid).want_omap_header = false;
         ++is_complete;
       }
     }
