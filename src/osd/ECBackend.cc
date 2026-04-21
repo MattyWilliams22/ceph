@@ -453,6 +453,16 @@ void ECBackend::handle_sub_write(
       dout(30) << " entry is_delete " << e.is_delete() << dendl;
     }
   }
+  
+  dout(20) << __func__ << " log_operation: "
+           << "log_entries.size=" << op.log_entries.size()
+           << " updated_hit_set_history=" << (op.updated_hit_set_history ? "present" : "none")
+           << " trim_to=" << op.trim_to
+           << " roll_forward_to=" << op.pg_committed_to
+           << " pg_committed_to=" << op.pg_committed_to
+           << " transaction_applied=" << !op.backfill_or_async_recovery
+           << " async=" << async
+           << dendl;
   get_parent()->log_operation(
     std::move(op.log_entries),
     op.updated_hit_set_history,
@@ -917,8 +927,13 @@ void ECBackend::handle_sub_read_reply(
       }
 
       int err = -EIO; // If attributes needed but not read.
-      if ((!rop.to_read.at(oid).want_attrs || rop.complete.at(oid).attrs) &&
-          (!rop.to_read.at(oid).want_omap_header || rop.complete.at(oid).omap_header)) {
+      const auto& to_read = rop.to_read.at(oid);
+      const auto& complete = rop.complete.at(oid);
+      bool attrs_satisfied = !to_read.want_attrs || complete.attrs;
+      bool omap_satisfied  = !to_read.want_omap_header ||
+                             complete.omap_header ||
+                             complete.omap_complete;
+      if (attrs_satisfied && omap_satisfied) {
         err = ec_impl->minimum_to_decode(want_to_read, have, dummy_minimum,
                                                     nullptr);
       }

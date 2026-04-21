@@ -417,11 +417,18 @@ public:
   void rm_object_attrs(const std::string &oid, const std::set<std::string> &attrs)
   {
     ObjectDesc new_obj = get_most_recent(oid);
+    size_t before_count = new_obj.attrs.size();
     for (std::set<std::string>::const_iterator i = attrs.begin();
-	 i != attrs.end();
-	 ++i) {
+  i != attrs.end();
+  ++i) {
       new_obj.attrs.erase(*i);
     }
+    size_t after_count = new_obj.attrs.size();
+    cout_prefix() << "MATTY: TEST: rm_object_attrs oid=" << oid
+                  << " snap=" << current_snap
+                  << " keys_removed=" << (before_count - after_count)
+                  << " total_keys_before=" << before_count
+                  << " total_keys_after=" << after_count << std::endl;
     new_obj.dirty = true;
     new_obj.flushed = false;
     pool_obj_cont[current_snap].insert_or_assign(oid, new_obj);
@@ -454,11 +461,18 @@ public:
   void update_object_attrs(const std::string &oid, const std::map<std::string, ContDesc> &attrs)
   {
     ObjectDesc new_obj = get_most_recent(oid);
+    size_t before_count = new_obj.attrs.size();
     for (auto i = attrs.cbegin();
-	 i != attrs.cend();
-	 ++i) {
+  i != attrs.cend();
+  ++i) {
       new_obj.attrs[i->first] = i->second;
     }
+    size_t after_count = new_obj.attrs.size();
+    cout_prefix() << "MATTY: TEST: update_object_attrs oid=" << oid
+                  << " snap=" << current_snap
+                  << " keys_added=" << attrs.size()
+                  << " total_keys_before=" << before_count
+                  << " total_keys_after=" << after_count << std::endl;
     new_obj.exists = true;
     new_obj.dirty = true;
     new_obj.flushed = false;

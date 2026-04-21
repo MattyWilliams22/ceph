@@ -1264,7 +1264,7 @@ protected:
       }
       if (rollbacker) {
 	for (auto &&i: entries) {
-	  rollbacker->trim(i);
+	  rollbacker->trim_after_remove(i);
 	}
       }
       return;
