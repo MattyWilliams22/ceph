@@ -195,30 +195,37 @@ public:
      * return true if we need to mark the pglog as dirty
      */
     template <typename F>
-    bool advance_can_rollback_to(eversion_t to, F &&f) {
+    bool advance_can_rollback_to(eversion_t to, F &&f, CephContext *cct = nullptr) {
       bool dirty_log = to > can_rollback_to || to > rollback_info_trimmed_to;
       if (dirty_log) {
-	if (to > can_rollback_to)
-	  can_rollback_to = to;
+        if (to > can_rollback_to)
+          can_rollback_to = to;
 
-	if (to > rollback_info_trimmed_to)
-	  rollback_info_trimmed_to = to;
+        if (to > rollback_info_trimmed_to)
+          rollback_info_trimmed_to = to;
       }
 
       eversion_t previous_version;
       if (rollback_info_trimmed_to_riter == log.rend()) {
-	previous_version = tail;
+        previous_version = tail;
       } else {
-	previous_version = rollback_info_trimmed_to_riter->version;
+        previous_version = rollback_info_trimmed_to_riter->version;
       }
       while (rollback_info_trimmed_to_riter != log.rbegin()) {
-	--rollback_info_trimmed_to_riter;
-	if (rollback_info_trimmed_to_riter->version > rollback_info_trimmed_to) {
-	  ++rollback_info_trimmed_to_riter;
-	  break;
-	}
-	f(*rollback_info_trimmed_to_riter, previous_version);
-	previous_version = rollback_info_trimmed_to_riter->version;
+        --rollback_info_trimmed_to_riter;
+        if (rollback_info_trimmed_to_riter->version > rollback_info_trimmed_to) {
+          ++rollback_info_trimmed_to_riter;
+          break;
+        }
+        if (cct) {
+          lgeneric_subdout(cct, osd, 15) << "MATTY: " << __func__ << " processing entry "
+            << rollback_info_trimmed_to_riter->version
+            << " soid=" << rollback_info_trimmed_to_riter->soid
+            << " op=" << rollback_info_trimmed_to_riter->op
+            << " previous_version=" << previous_version << dendl;
+        }
+        f(*rollback_info_trimmed_to_riter, previous_version);
+        previous_version = rollback_info_trimmed_to_riter->version;
       }
 
       return dirty_log;
@@ -269,34 +276,34 @@ public:
       return *this;
     }
 
-    void trim_rollback_info_to(eversion_t to, pg_info_t *info, LogEntryHandler *h) {
+    void trim_rollback_info_to(eversion_t to, pg_info_t *info, LogEntryHandler *h, CephContext *cct = nullptr) {
       advance_can_rollback_to(
-	to,
-	[&](pg_log_entry_t &entry, eversion_t previous_version) {
-	  h->trim(entry);
-	  h->partial_write(info, previous_version, entry);
-	});
-    }
-    bool roll_forward_to(eversion_t to, pg_info_t *info, LogEntryHandler *h) {
-      return advance_can_rollback_to(
-	to,
-	[&](pg_log_entry_t &entry, eversion_t previous_version) {
-	  h->rollforward(entry);
-	  h->partial_write(info, previous_version, entry);
-	});
-    }
-
-    void skip_can_rollback_to_to_head(pg_info_t *info, LogEntryHandler *h) {
-      advance_can_rollback_to(
-	head,
+        to,
         [&](pg_log_entry_t &entry, eversion_t previous_version) {
-	  h->partial_write(info, previous_version, entry);
-	});
+          h->trim(entry);
+          h->partial_write(info, previous_version, entry);
+        }, cct);
+    }
+    bool roll_forward_to(eversion_t to, pg_info_t *info, LogEntryHandler *h, CephContext *cct = nullptr) {
+      return advance_can_rollback_to(
+        to,
+        [&](pg_log_entry_t &entry, eversion_t previous_version) {
+          h->rollforward(entry);
+          h->partial_write(info, previous_version, entry);
+        }, cct);
     }
 
-    void skip_can_rollback_to_to_head() {
+    void skip_can_rollback_to_to_head(pg_info_t *info, LogEntryHandler *h, CephContext *cct = nullptr) {
+      advance_can_rollback_to(
+        head,
+                [&](pg_log_entry_t &entry, eversion_t previous_version) {
+          h->partial_write(info, previous_version, entry);
+        }, cct);
+    }
+
+    void skip_can_rollback_to_to_head(CephContext *cct = nullptr) {
       advance_can_rollback_to(head, [&](const pg_log_entry_t &entry,
-					eversion_t previous_version) {});
+    	eversion_t previous_version) {}, cct);
     }
 
     mempool::osd_pglog::list<pg_log_entry_t> rewind_from_head(eversion_t newhead, bool *dirty_log = nullptr) {
@@ -915,9 +922,9 @@ public:
       h);
   }
 
-  void skip_rollforward(pg_info_t *info, LogEntryHandler *h) {
+  void skip_rollforward(pg_info_t *info, LogEntryHandler *h, CephContext *cct = nullptr) {
     // Update pwlc during backfill
-    log.skip_can_rollback_to_to_head(info, h);
+    log.skip_can_rollback_to_to_head(info, h, cct);
   }
 
   //////////////////// get or std::set log & missing ////////////////////
