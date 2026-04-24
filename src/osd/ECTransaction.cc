@@ -363,7 +363,6 @@ void ECTransaction::Generate::delete_first() {
   }
   if (entry) {
     entry->mod_desc.rmobject(entry->version.version);
-    ec_omap_journal.append_delete(plan.hoid, entry->version.version, entry->is_lost_delete());
     all_shards_written();
     for (auto &&[shard, t]: transactions) {
       t.collection_move_rename(
@@ -544,9 +543,6 @@ void ECTransaction::OmapCloneVisitor::ec_omap(
 }
 
 void ECTransaction::OmapCloneVisitor::apply_to_clone() {
-  // Get generation number for destination object
-  const auto [gen, lost_delete] = ec_omap_journal.get_generation(dest_oid);
-  
   // Apply accumulated omap operations to primary capable shard transactions only
   for (auto &&[shard, t] : transactions) {
     // Skip non-primary shards - they don't store omap data
@@ -556,7 +552,7 @@ void ECTransaction::OmapCloneVisitor::apply_to_clone() {
     
     coll_t coll(spg_t(pgid, shard));
     // Use generation number from journal if available, otherwise NO_GEN
-    ghobject_t dest(dest_oid, gen, shard);
+    ghobject_t dest(dest_oid, ghobject_t::NO_GEN, shard);
     
     // Apply clear_omap if needed
     if (has_clear_omap) {

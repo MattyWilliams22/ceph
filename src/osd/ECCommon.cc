@@ -1183,7 +1183,8 @@ void ECCommon::RecoveryBackend::handle_recovery_push(
       coll,
       tobj,
       op.attrset);
-    if (get_parent()->get_pool().supports_omap()) {
+    if (get_parent()->get_pool().supports_omap() &&
+        !sinfo.is_nonprimary_shard(get_parent()->whoami_shard().shard)) {
       dout(0) << "MATTY: ECCOMMON: recovery_omap_clear tobj=" << tobj << dendl;
       m->t.omap_clear(
         coll,
@@ -1199,10 +1200,12 @@ void ECCommon::RecoveryBackend::handle_recovery_push(
 
   if (!op.omap_entries.empty()) {
     ceph_assert(get_parent()->get_pool().supports_omap());
-    m->t.omap_setkeys(
-    coll,
-    tobj,
-    op.omap_entries);
+    if (!sinfo.is_nonprimary_shard(get_parent()->whoami_shard().shard)) {
+      m->t.omap_setkeys(
+      coll,
+      tobj,
+      op.omap_entries);
+    }
   }
 
   if (op.after_progress.data_complete && op.after_progress.omap_complete) {
@@ -1659,7 +1662,7 @@ void ECCommon::RecoveryBackend::continue_recovery_op(
             pop.attrset.erase(ECUtil::get_hinfo_key());
           }
         }
-        if (op.omap_entries) {
+        if (!sinfo.is_nonprimary_shard(pg_shard.shard) && op.omap_entries) {
           pop.omap_entries = *(op.omap_entries);
         }
         pop.recovery_info = op.recovery_info;

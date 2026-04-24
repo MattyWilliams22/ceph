@@ -427,12 +427,17 @@ void ECBackend::handle_sub_write(
 
   // Update EC omap journal on non-primary shards from log entries
   // This ensures the journal has the correct generation info when transactions are applied
-  if (!get_parent()->pgb_is_primary()) {
-    for (auto &&e: op.log_entries) {
-      if (e.is_delete() || e.is_lost_delete() || (e.is_clone() && !e.soid.is_snap())) {
+  for (auto &&e: op.log_entries) {
+    if (e.is_delete() || e.is_lost_delete() || (e.is_clone() && !e.soid.is_snap())) {
+      if (!op.backfill_or_async_recovery) {
         // Track deletes and clones (to non-snap targets) in the journal so we know the generation number
         ec_omap_journal.append_delete(e.soid, e.version.version, e.is_lost_delete());
-        dout(20) << __func__ << " non-primary shard updating journal: "
+        dout(20) << __func__ << " appending delete to journal: "
+                 << (e.is_clone() ? "clone" : "delete")
+                 << " " << e.soid << " version=" << e.version.version
+                 << " lost_delete=" << e.is_lost_delete() << dendl;
+      } else {
+        dout(20) << __func__ << " skipping journal append_delete during backfill/recovery: "
                  << (e.is_clone() ? "clone" : "delete")
                  << " " << e.soid << " version=" << e.version.version
                  << " lost_delete=" << e.is_lost_delete() << dendl;
