@@ -476,29 +476,28 @@ void alloc_hint(PGTransaction::ObjectOperation& op,
   }
 }
 
-void ECTransaction::OmapCloneVisitor::ec_omap(
+void ECTransaction::accumulate_omap_updates(
   bool clear_omap,
-  std::optional<ceph::buffer::list> header,
-  std::vector<std::pair<OmapUpdateType, ceph::buffer::list>> &updates) {
-  
-  ldpp_dout(dpp, 0) << "MATTY: ECTRANS: clone_visitor src=" << source_oid
-          << " dest=" << dest_oid << " clear_omap=" << clear_omap
-          << " header_size=" << (header ? header->length() : 0) << dendl;
-  
+  const std::optional<ceph::buffer::list>& header,
+  const std::vector<std::pair<OmapUpdateType, ceph::buffer::list>>& updates,
+  std::optional<ceph::buffer::list>& out_header,
+  std::map<std::string, std::optional<ceph::buffer::list>>& key_updates,
+  std::list<std::pair<std::string, std::optional<std::string>>>& removed_ranges)
+{
   // Handle clear_omap flag
   if (clear_omap) {
-    has_clear_omap = true;
-    omap_updates.clear();
+    key_updates.clear();
     removed_ranges.clear();
-    removed_ranges.emplace_back("", std::nullopt); // Remove full range
+    removed_ranges.emplace_back("", std::nullopt);
+    out_header.reset();
   }
   
   // Handle omap header
   if (header) {
-    omap_header = header;
+    out_header = header;
   }
   
-  // Handle omap updates
+  // Decode and accumulate updates
   for (auto &[type, bl] : updates) {
     auto p = bl.cbegin();
     
@@ -507,7 +506,7 @@ void ECTransaction::OmapCloneVisitor::ec_omap(
         std::map<std::string, ceph::buffer::list> kv_map;
         decode(kv_map, p);
         for (auto &[key, value] : kv_map) {
-          omap_updates[key] = value;
+          key_updates[key] = value;
         }
         break;
       }
@@ -515,7 +514,7 @@ void ECTransaction::OmapCloneVisitor::ec_omap(
         std::set<std::string> keys_to_remove;
         decode(keys_to_remove, p);
         for (auto &key : keys_to_remove) {
-          omap_updates[key] = std::nullopt;
+          key_updates[key] = std::nullopt;
         }
         break;
       }
@@ -523,16 +522,12 @@ void ECTransaction::OmapCloneVisitor::ec_omap(
         std::string range_start, range_end;
         decode(range_start, p);
         decode(range_end, p);
-        
-        // Add range to list of removed ranges
         removed_ranges.emplace_back(range_start, range_end);
         
-        // Mark any keys within range as removed
-        auto map_it = omap_updates.lower_bound(range_start);
-        while (map_it != omap_updates.end()) {
-          if (map_it->first >= range_end) {
-            break;
-          }
+        // Mark keys within range as removed
+        auto map_it = key_updates.lower_bound(range_start);
+        while (map_it != key_updates.end()) {
+          if (map_it->first >= range_end) break;
           map_it->second = std::nullopt;
           ++map_it;
         }
@@ -542,47 +537,53 @@ void ECTransaction::OmapCloneVisitor::ec_omap(
   }
 }
 
-void ECTransaction::OmapCloneVisitor::apply_to_clone() {
-  // Apply accumulated omap operations to primary capable shard transactions only
+void ECTransaction::apply_omap_to_transactions(
+  shard_id_map<ceph::os::Transaction>& transactions,
+  const pg_t& pgid,
+  const hobject_t& target_oid,
+  const ECUtil::stripe_info_t& sinfo,
+  bool clear_omap,
+  const std::optional<ceph::buffer::list>& header,
+  const std::map<std::string, std::optional<ceph::buffer::list>>& key_updates,
+  const std::list<std::pair<std::string, std::optional<std::string>>>& removed_ranges,
+  const DoutPrefixProvider* dpp)
+{
   for (auto &&[shard, t] : transactions) {
-    // Skip non-primary shards - they don't store omap data
+    // Only primary capable-shards store omap
     if (sinfo.is_nonprimary_shard(shard)) {
       continue;
     }
     
     coll_t coll(spg_t(pgid, shard));
-    // Use generation number from journal if available, otherwise NO_GEN
-    ghobject_t dest(dest_oid, ghobject_t::NO_GEN, shard);
+    ghobject_t goid(target_oid, ghobject_t::NO_GEN, shard);
     
     // Apply clear_omap if needed
-    if (has_clear_omap) {
-      t.omap_clear(coll, dest);
+    if (clear_omap) {
+      t.omap_clear(coll, goid);
     }
     
     // Apply removed ranges
     for (auto &[range_start, range_end] : removed_ranges) {
       if (range_end) {
-        // Remove specific range
-        t.omap_rmkeyrange(coll, dest, range_start, *range_end);
+        t.omap_rmkeyrange(coll, goid, range_start, *range_end);
       } else {
-        // Remove from start to end (full clear if start is empty)
-        t.omap_rmkeyrange(coll, dest, range_start, "");
+        t.omap_rmkeyrange(coll, goid, range_start, "");
       }
     }
     
     // Apply header update if present
-    if (omap_header) {
-      ldpp_dout(dpp, 0) << "MATTY: ECTRANS: omap_setheader dest=" << dest
-              << " header_size=" << omap_header->length() << " (writing to clone)" << dendl;
-      t.omap_setheader(coll, dest, *omap_header);
+    if (header) {
+      ldpp_dout(dpp, 20) << "apply_omap_to_transactions: omap_setheader oid=" 
+                << target_oid << " header_size=" << header->length() << dendl;
+      t.omap_setheader(coll, goid, *header);
     }
     
     // Apply key updates
-    if (!omap_updates.empty()) {
+    if (!key_updates.empty()) {
       std::map<std::string, ceph::buffer::list> to_set;
       std::set<std::string> to_remove;
       
-      for (auto &[key, val] : omap_updates) {
+      for (auto &[key, val] : key_updates) {
         if (val) {
           to_set[key] = *val;
         } else {
@@ -591,13 +592,74 @@ void ECTransaction::OmapCloneVisitor::apply_to_clone() {
       }
       
       if (!to_set.empty()) {
-        t.omap_setkeys(coll, dest, to_set);
+        t.omap_setkeys(coll, goid, to_set);
       }
       if (!to_remove.empty()) {
-        t.omap_rmkeys(coll, dest, to_remove);
+        t.omap_rmkeys(coll, goid, to_remove);
       }
     }
   }
+}
+
+
+void ECTransaction::OmapCloneVisitor::ec_omap(
+  bool clear_omap,
+  std::optional<ceph::buffer::list> header,
+  std::vector<std::pair<OmapUpdateType, ceph::buffer::list>> &updates) {
+  
+  ldpp_dout(dpp, 0) << "MATTY: ECTRANS: clone_visitor src=" << source_oid
+          << " dest=" << dest_oid << " clear_omap=" << clear_omap
+          << " header_size=" << (header ? header->length() : 0) << dendl;
+  
+  accumulate_omap_updates(
+    clear_omap,
+    header,
+    updates,
+    omap_header,
+    omap_updates,
+    removed_ranges);
+  
+  if (clear_omap) {
+    has_clear_omap = true;
+  }
+}
+
+void ECTransaction::OmapCloneVisitor::apply_to_clone() {
+  apply_omap_to_transactions(
+    transactions,
+    pgid,
+    dest_oid,
+    sinfo,
+    has_clear_omap,
+    omap_header,
+    omap_updates,
+    removed_ranges,
+    dpp);
+}
+
+void ECTransaction::Generate::apply_omap_updates_without_journal() {
+  std::map<std::string, std::optional<ceph::buffer::list>> key_updates;
+  std::list<std::pair<std::string, std::optional<std::string>>> removed_ranges;
+  std::optional<ceph::buffer::list> header_out;
+  
+  accumulate_omap_updates(
+    op.clear_omap,
+    op.omap_header,
+    op.omap_updates,
+    header_out,
+    key_updates,
+    removed_ranges);
+  
+  apply_omap_to_transactions(
+    transactions,
+    pgid,
+    oid,
+    sinfo,
+    op.clear_omap,
+    header_out,
+    key_updates,
+    removed_ranges,
+    dpp);
 }
 
 
@@ -763,22 +825,26 @@ ECTransaction::Generate::Generate(PGTransaction &t,
     attr_updates();
   }
 
+  if (!op.omap_updates.empty() || op.clear_omap || op.omap_header) {
+    ceph_assert(osdmap->get_pg_pool(pgid.pool())->supports_omap());
+    if (entry) {
+      ECOmapJournalEntry new_entry(entry->version, op.clear_omap, op.omap_header, op.omap_updates);
+      entry->mod_desc.ec_omap(
+        op.clear_omap,
+        op.omap_header,
+        op.omap_updates);
+      ec_omap_journal.add_entry(plan.hoid, new_entry);
+    } else {
+      apply_omap_updates_without_journal();
+    }
+  }
+
   if (!entry) {
     return;
   }
 
   if (!xattr_rollback.empty()) {
     entry->mod_desc.setattrs(xattr_rollback);
-  }
-
-  if (!op.omap_updates.empty() || op.clear_omap || op.omap_header) {
-    ceph_assert(osdmap->get_pg_pool(pgid.pool())->supports_omap());
-    ECOmapJournalEntry new_entry(entry->version, op.clear_omap, op.omap_header, op.omap_updates);
-    entry->mod_desc.ec_omap(
-      op.clear_omap,
-      op.omap_header,
-      op.omap_updates);
-    ec_omap_journal.add_entry(plan.hoid, new_entry);
   }
 
   /* It is essential for rollback that every shard with a non-empty transaction

@@ -78,6 +78,32 @@ struct WritePlan {
    os << "]";
   }
 };
+/**
+ * Decode and accumulate omap updates from encoded operation list.
+ * Handles Insert, Remove, and RemoveRange operations.
+ */
+void accumulate_omap_updates(
+  bool clear_omap,
+  const std::optional<ceph::buffer::list>& header,
+  const std::vector<std::pair<OmapUpdateType, ceph::buffer::list>>& updates,
+  std::optional<ceph::buffer::list>& out_header,
+  std::map<std::string, std::optional<ceph::buffer::list>>& key_updates,
+  std::list<std::pair<std::string, std::optional<std::string>>>& removed_ranges);
+
+/**
+ * Apply accumulated omap updates to primary-capable shard transactions.
+ */
+void apply_omap_to_transactions(
+  shard_id_map<ceph::os::Transaction>& transactions,
+  const pg_t& pgid,
+  const hobject_t& target_oid,
+  const ECUtil::stripe_info_t& sinfo,
+  bool clear_omap,
+  const std::optional<ceph::buffer::list>& header,
+  const std::map<std::string, std::optional<ceph::buffer::list>>& key_updates,
+  const std::list<std::pair<std::string, std::optional<std::string>>>& removed_ranges,
+  const DoutPrefixProvider* dpp);
+
 
 /**
  * OmapCloneVisitor - Visitor to extract and apply omap updates to clone transactions
@@ -169,6 +195,12 @@ class Generate {
   std::vector<const pg_log_entry_t*> get_incomplete_ec_omap_log_entries(
     const hobject_t &hoid,
     eversion_t can_rollback_to);
+  /**
+   * Apply omap updates directly to transactions without journaling.
+   * Should only be called when entry is null (temporary/non-journaled operations).
+   * For journaled operations, use entry->mod_desc.ec_omap() instead.
+   */
+  void apply_omap_updates_without_journal();
 
  public:
   Generate(PGTransaction &t,

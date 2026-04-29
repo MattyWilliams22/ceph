@@ -4765,8 +4765,7 @@ void PeeringState::append_log(
     /* We don't want to leave the rollforward artifacts around
      * here past last_backfill.  It's ok for the same reason as
      * above */
-    if (transaction_applied &&
-     !info.last_backfill.is_max()) {
+    if (transaction_applied && !is_acting(pg_whoami)) {
       psdout(10) << "MATTY: " << __func__ 
              << ": rolling forward past last_backfill, soid="
              << p->soid << " last_backfill=" << info.last_backfill

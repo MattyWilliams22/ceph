@@ -8299,6 +8299,9 @@ int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	    result = -EINVAL;
 	    break;
 	  }
+	  dout(20) << "MATTY: " << __func__ << " COPY_FROM operation starting on OSD "
+	           << osd->whoami << " dest=" << soid << " src=" << src
+	           << " src_version=" << src_version << dendl;
 	  CopyFromCallback *cb = new CopyFromCallback(ctx, osd_op);
 	  if (have_truncate)
 	    cb->set_truncate(truncate_seq, truncate_size);
@@ -9523,17 +9526,30 @@ int PrimaryLogPG::do_copy_get(OpContext *ctx, bufferlist::const_iterator& bp,
 
   // omap
   uint32_t omap_keys = 0;
+  dout(20) << "MATTY: " << __func__ << " omap section start - cursor.omap_offset='" << cursor.omap_offset
+           << "' left=" << left << " cursor.omap_complete=" << cursor.omap_complete
+           << " supports_omap=" << pool.info.supports_omap()
+           << " is_omap=" << oi.is_omap() << dendl;
   if (!pool.info.supports_omap() || !oi.is_omap()) {
     cursor.omap_complete = true;
+    dout(20) << "MATTY: " << __func__ << " omap_complete set to true (pool doesn't support omap or object has no omap)" << dendl;
   } else {
     if (left > 0 && !cursor.omap_complete) {
       ceph_assert(cursor.data_complete);
       if (cursor.omap_offset.empty()) {
-	get_pgbackend()->omap_get_header(ch,
-	  ghobject_t(oi.soid, ghobject_t::NO_GEN, whoami_shard().shard),
-	  &reply_obj.omap_header, false);
+        dout(20) << "MATTY: " << __func__ << " reading omap header (cursor.omap_offset is empty)" << dendl;
+        int header_result = get_pgbackend()->omap_get_header(ch,
+          ghobject_t(oi.soid, ghobject_t::NO_GEN, whoami_shard().shard),
+          &reply_obj.omap_header, false);
+        dout(20) << "MATTY: " << __func__ << " omap_get_header result=" << header_result
+                 << " header_length=" << reply_obj.omap_header.length() << dendl;
+      } else {
+        dout(20) << "MATTY: " << __func__ << " NOT reading omap header (cursor.omap_offset='"
+                 << cursor.omap_offset << "' is not empty)" << dendl;
       }
       bufferlist omap_data;
+      dout(20) << "MATTY: " << __func__ << " calling omap_iterate with cursor.omap_offset='"
+               << cursor.omap_offset << "'" << dendl;
       const auto result = get_pgbackend()->omap_iterate(
         ch, ghobject_t(oi.soid, ghobject_t::NO_GEN, whoami_shard().shard),
         ObjectStore::omap_iter_seek_t{
@@ -9542,28 +9558,43 @@ int PrimaryLogPG::do_copy_get(OpContext *ctx, bufferlist::const_iterator& bp,
         },
         [&omap_data, &omap_keys, &left, &cursor]
         (std::string_view key, std::string_view value) mutable {
-	  ++omap_keys;
-	  encode(key, omap_data);
-	  encode(value, omap_data);
-	  left -= key.length() + 4 + value.length() + 4;
-	  if (left <= 0) {
-	    cursor.omap_offset = key;
+          ++omap_keys;
+          encode(key, omap_data);
+          encode(value, omap_data);
+          left -= key.length() + 4 + value.length() + 4;
+          if (left <= 0) {
+            cursor.omap_offset = key;
             return ObjectStore::omap_iter_ret_t::STOP;
-	  }
+          }
           return ObjectStore::omap_iter_ret_t::NEXT;
         });
+      dout(20) << "MATTY: " << __func__ << " omap_iterate result=" << result << " omap_keys=" << omap_keys << dendl;
       if (result < 0) {
-	ceph_abort();
+        ceph_abort();
       } else if (const auto more = static_cast<bool>(result); !more) {
-	cursor.omap_complete = true;
-	dout(20) << " got omap" << dendl;
+        cursor.omap_complete = true;
+        dout(20) << "MATTY: " << __func__ << " omap_complete set to true (no more keys, omap_iterate returned !more)" << dendl;
+        dout(20) << " got omap" << dendl;
+      } else {
+        dout(20) << "MATTY: " << __func__ << " omap NOT complete (more keys available, stopped due to left=" << left << ")" << dendl;
       }
       if (omap_keys) {
-	encode(omap_keys, reply_obj.omap_data);
-	reply_obj.omap_data.claim_append(omap_data);
+        encode(omap_keys, reply_obj.omap_data);
+        reply_obj.omap_data.claim_append(omap_data);
+        dout(20) << "MATTY: " << __func__ << " encoded " << omap_keys << " omap keys, total omap_data length="
+                 << reply_obj.omap_data.length() << dendl;
+      } else {
+        dout(20) << "MATTY: " << __func__ << " no omap keys read in this iteration" << dendl;
       }
+    } else {
+      dout(20) << "MATTY: " << __func__ << " skipping omap read (left=" << left
+               << " cursor.omap_complete=" << cursor.omap_complete << ")" << dendl;
     }
   }
+
+  dout(20) << "MATTY: " << __func__ << " omap iteration summary: omap_keys_read="
+           << omap_keys << " cursor.omap_complete=" << cursor.omap_complete
+           << " cursor.omap_offset='" << cursor.omap_offset << "'" << dendl;
 
   if (cursor.is_complete()) {
     // include reqids only in the final step.  this is a bit fragile
@@ -9623,10 +9654,13 @@ void PrimaryLogPG::start_copy(CopyCallback *cb, ObjectContextRef obc,
 {
   const hobject_t& dest = obc->obs.oi.soid;
   dout(10) << __func__ << " " << dest
-	   << " from " << src << " " << oloc << " v" << version
-	   << " flags " << flags
-	   << (mirror_snapset ? " mirror_snapset" : "")
-	   << dendl;
+           << " from " << src << " " << oloc << " v" << version
+           << " flags " << flags
+           << (mirror_snapset ? " mirror_snapset" : "")
+           << dendl;
+  dout(20) << "MATTY: " << __func__ << " initiating copy operation on OSD "
+           << osd->whoami << " dest=" << dest << " src=" << src
+           << " src_pool=" << oloc.pool << " version=" << version << dendl;
 
   ceph_assert(!mirror_snapset || src.snap == CEPH_NOSNAP);
 
@@ -9835,6 +9869,15 @@ void PrimaryLogPG::process_copy_chunk(hobject_t oid, ceph_tid_t tid, int r)
 	     << " tid " << cop->objecter_tid << dendl;
     return;
   }
+
+  dout(20) << "MATTY: " << __func__ << " received omap_header length: "
+           << cop->omap_header.length() << " omap_data length: "
+           << cop->omap_data.length() << dendl;
+  dout(20) << "MATTY: " << __func__ << " cursor state: data_complete="
+           << cop->cursor.data_complete << " attr_complete="
+           << cop->cursor.attr_complete << " omap_complete="
+           << cop->cursor.omap_complete << " is_complete="
+           << cop->cursor.is_complete() << dendl;
 
   if (cop->omap_data.length() || cop->omap_header.length())
     cop->results.has_omap = true;
@@ -10203,17 +10246,21 @@ void PrimaryLogPG::_write_copy_chunk(CopyOpRef cop, PGTransaction *t)
   if (pool.info.supports_omap()) {
     if (!cop->temp_cursor.omap_complete) {
       if (cop->omap_header.length()) {
-	t->omap_setheader(
-	  cop->results.temp_oid,
-	  cop->omap_header);
-	cop->omap_header.clear();
+        dout(20) << "MATTY: " << __func__ << " writing omap_header to transaction, length="
+                  << cop->omap_header.length() << " temp_oid=" << cop->results.temp_oid << dendl;
+        t->omap_setheader(
+          cop->results.temp_oid,
+          cop->omap_header);
+        cop->omap_header.clear();
       }
       if (cop->omap_data.length()) {
-	map<string,bufferlist> omap;
-	bufferlist::const_iterator p = cop->omap_data.begin();
-	decode(omap, p);
-	t->omap_setkeys(cop->results.temp_oid, omap);
-	cop->omap_data.clear();
+        map<string,bufferlist> omap;
+        bufferlist::const_iterator p = cop->omap_data.begin();
+        decode(omap, p);
+        dout(20) << "MATTY: " << __func__ << " writing omap_data to transaction, "
+                  << omap.size() << " keys, temp_oid=" << cop->results.temp_oid << dendl;
+        t->omap_setkeys(cop->results.temp_oid, omap);
+        cop->omap_data.clear();
       }
     }
   } else {
@@ -10227,6 +10274,9 @@ void PrimaryLogPG::finish_copyfrom(CopyFromCallback *cb)
 {
   OpContext *ctx = cb->ctx;
   dout(20) << "finish_copyfrom on " << ctx->obs->oi.soid << dendl;
+  dout(20) << "MATTY: " << __func__ << " COPY_FROM operation completing on OSD "
+           << osd->whoami << " dest=" << ctx->obs->oi.soid
+           << " final_size=" << cb->get_data_size() << dendl;
 
   ObjectState& obs = ctx->new_obs;
   if (obs.exists) {
