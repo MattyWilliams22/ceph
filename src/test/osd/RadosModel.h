@@ -417,18 +417,11 @@ public:
   void rm_object_attrs(const std::string &oid, const std::set<std::string> &attrs)
   {
     ObjectDesc new_obj = get_most_recent(oid);
-    size_t before_count = new_obj.attrs.size();
     for (std::set<std::string>::const_iterator i = attrs.begin();
   i != attrs.end();
   ++i) {
       new_obj.attrs.erase(*i);
     }
-    size_t after_count = new_obj.attrs.size();
-    cout_prefix() << "MATTY: TEST: rm_object_attrs oid=" << oid
-                  << " snap=" << current_snap
-                  << " keys_removed=" << (before_count - after_count)
-                  << " total_keys_before=" << before_count
-                  << " total_keys_after=" << after_count << std::endl;
     new_obj.dirty = true;
     new_obj.flushed = false;
     pool_obj_cont[current_snap].insert_or_assign(oid, new_obj);
@@ -437,8 +430,6 @@ public:
   void remove_object_header(const std::string &oid)
   {
     ObjectDesc new_obj = get_most_recent(oid);
-    cout_prefix() << "MATTY: TEST: remove_object_header oid=" << oid
-                  << " snap=" << current_snap << " (clearing header)" << std::endl;
     new_obj.header = bufferlist();
     new_obj.dirty = true;
     new_obj.flushed = false;
@@ -449,8 +440,6 @@ public:
   void update_object_header(const std::string &oid, const bufferlist &bl)
   {
     ObjectDesc new_obj = get_most_recent(oid);
-    cout_prefix() << "MATTY: TEST: update_object_header oid=" << oid
-                  << " snap=" << current_snap << " header_size=" << bl.length() << std::endl;
     new_obj.header = bl;
     new_obj.exists = true;
     new_obj.dirty = true;
@@ -461,18 +450,11 @@ public:
   void update_object_attrs(const std::string &oid, const std::map<std::string, ContDesc> &attrs)
   {
     ObjectDesc new_obj = get_most_recent(oid);
-    size_t before_count = new_obj.attrs.size();
     for (auto i = attrs.cbegin();
   i != attrs.cend();
   ++i) {
       new_obj.attrs[i->first] = i->second;
     }
-    size_t after_count = new_obj.attrs.size();
-    cout_prefix() << "MATTY: TEST: update_object_attrs oid=" << oid
-                  << " snap=" << current_snap
-                  << " keys_added=" << attrs.size()
-                  << " total_keys_before=" << before_count
-                  << " total_keys_after=" << after_count << std::endl;
     new_obj.exists = true;
     new_obj.dirty = true;
     new_obj.flushed = false;
@@ -604,8 +586,6 @@ public:
     ceph_assert(!get_watch_context(oid));
     ObjectDesc contents;
     find_object(oid, &contents, snap);
-    cout_prefix() << "MATTY: TEST: roll_back oid=" << oid
-                  << " to_snap=" << snap << " header_size=" << contents.header.length() << std::endl;
     contents.dirty = true;
     contents.flushed = false;
     pool_obj_cont.rbegin()->second.insert_or_assign(oid, contents);
@@ -1692,9 +1672,6 @@ public:
       // Attributes
       if (!context->no_omap) {
         if (!(old_value.header == header)) {
-          context->cout_prefix() << "MATTY: TEST: read_verify oid=" << oid
-          << " expected_size=" << old_value.header.length()
-          << " actual_size=" << header.length() << " MISMATCH" << std::endl;
           std::cerr << num << ": oid " << oid << " header does not match, old size: "
             << old_value.header.length() << " new size " << header.length()
             << std::endl;

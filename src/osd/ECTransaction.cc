@@ -607,10 +607,6 @@ void ECTransaction::OmapCloneVisitor::ec_omap(
   std::optional<ceph::buffer::list> header,
   std::vector<std::pair<OmapUpdateType, ceph::buffer::list>> &updates) {
   
-  ldpp_dout(dpp, 0) << "MATTY: ECTRANS: clone_visitor src=" << source_oid
-          << " dest=" << dest_oid << " clear_omap=" << clear_omap
-          << " header_size=" << (header ? header->length() : 0) << dendl;
-  
   accumulate_omap_updates(
     clear_omap,
     header,

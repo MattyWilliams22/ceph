@@ -78,13 +78,6 @@ void ECOmapHeader::update_header(const eversion_t new_version,
 
 
 void ECOmapJournal::add_entry(const hobject_t &hoid, const ECOmapJournalEntry &entry) {
-  if (dpp) {
-    ldpp_dout(dpp, 0) << "MATTY: JOURNAL: add_entry hoid=" << hoid
-                      << " version=" << entry.version
-                      << " clear_omap=" << entry.clear_omap
-                      << " header_size=" << (entry.omap_header ? entry.omap_header->length() : 0)
-                      << dendl;
-  }
   entries[hoid].push_back(entry);
 }
 
@@ -95,10 +88,6 @@ bool ECOmapJournal::remove_entry(const hobject_t &hoid, const ECOmapJournalEntry
     auto &entry_list = it_map->second;
     for (const auto& an_entry : entry_list) {
       if (an_entry.version == entry.version) {
-        if (dpp) {
-          ldpp_dout(dpp, 0) << "MATTY: JOURNAL: remove_entry hoid=" << hoid
-                            << " version=" << entry.version << " found_unprocessed=true" << dendl;
-        }
         entry_list.remove(an_entry);
         if (const auto header_it = header_map.find(hoid);
           header_it != header_map.end() &&
@@ -109,11 +98,6 @@ bool ECOmapJournal::remove_entry(const hobject_t &hoid, const ECOmapJournalEntry
       }
     }
   }
-  if (dpp) {
-    ldpp_dout(dpp, 0) << "MATTY: JOURNAL: remove_entry hoid=" << hoid
-                      << " version=" << entry.version << " found_unprocessed=false" << dendl;
-  }
-
   // Attempt to remove entry from processed entries
   return remove_processed_entry(hoid, entry);
 }
@@ -238,10 +222,6 @@ ECOmapJournal::get_value_updates(const hobject_t &hoid) {
 
 void ECOmapJournal::process_entries(const hobject_t &hoid) {
   auto entry_list = get_entries(hoid);
-  if (dpp) {
-    ldpp_dout(dpp, 0) << "MATTY: JOURNAL: process_entries hoid=" << hoid
-                      << " processing " << entry_list.size() << " entries" << dendl;
-  }
   for (auto entry_iter = begin_entries(hoid);
         entry_iter != end_entries(hoid); ++entry_iter) {
     ECOmapRemovedRanges removed_ranges(entry_iter->version);
@@ -528,20 +508,6 @@ void ECOmapJournal::append_delete(
   } else {
     object_state_map.insert({hoid, {{version, lost_delete}}});
   }
-  
-  // Get the total number of versions for this object after the operation
-  size_t total_versions = 0;
-  if (const auto it = object_state_map.find(hoid); it != object_state_map.end()) {
-    total_versions = it->second.size();
-  }
-  
-  if (dpp) {
-    ldpp_dout(dpp, 0) << "MATTY: JOURNAL: append_delete hoid=" << hoid
-                      << " version=" << version
-                      << " whiteout=" << lost_delete
-                      << " total_versions=" << total_versions
-                      << dendl;
-  }
 }
 
 void ECOmapJournal::append_create(const hobject_t &hoid)
@@ -562,14 +528,6 @@ void ECOmapJournal::append_whiteout(const hobject_t &hoid)
 
 void ECOmapJournal::trim_delete(const hobject_t &hoid, const version_t version)
 {
-  // Capture whiteout value before erasing
-  bool whiteout = false;
-  if (const auto it = object_state_map.find(hoid); it != object_state_map.end()) {
-    if (const auto it2 = it->second.find(version); it2 != it->second.end()) {
-      whiteout = it2->second;
-    }
-  }
-  
   if (const auto it = object_state_map.find(hoid); it != object_state_map.end()) {
     std::map<version_t,bool>& versions = it->second;
     if (const auto it2 = versions.find(version); it2 != versions.end()) {
@@ -578,20 +536,6 @@ void ECOmapJournal::trim_delete(const hobject_t &hoid, const version_t version)
     if (versions.empty()) {
       object_state_map.erase(it);
     }
-  }
-  
-  // Get the total number of versions for this object after the operation
-  size_t total_versions = 0;
-  if (const auto it = object_state_map.find(hoid); it != object_state_map.end()) {
-    total_versions = it->second.size();
-  }
-  
-  if (dpp) {
-    ldpp_dout(dpp, 0) << "MATTY: JOURNAL: trim_delete hoid=" << hoid
-                      << " version=" << version
-                      << " whiteout=" << whiteout
-                      << " total_versions=" << total_versions
-                      << dendl;
   }
 }
 

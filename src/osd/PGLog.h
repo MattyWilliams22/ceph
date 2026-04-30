@@ -217,13 +217,6 @@ public:
           ++rollback_info_trimmed_to_riter;
           break;
         }
-        if (cct) {
-          lgeneric_subdout(cct, osd, 15) << "MATTY: " << __func__ << " processing entry "
-            << rollback_info_trimmed_to_riter->version
-            << " soid=" << rollback_info_trimmed_to_riter->soid
-            << " op=" << rollback_info_trimmed_to_riter->op
-            << " previous_version=" << previous_version << dendl;
-        }
         f(*rollback_info_trimmed_to_riter, previous_version);
         previous_version = rollback_info_trimmed_to_riter->version;
       }

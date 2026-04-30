@@ -1185,12 +1185,9 @@ void ECCommon::RecoveryBackend::handle_recovery_push(
       op.attrset);
     if (get_parent()->get_pool().supports_omap() &&
         !sinfo.is_nonprimary_shard(get_parent()->whoami_shard().shard)) {
-      dout(0) << "MATTY: ECCOMMON: recovery_omap_clear tobj=" << tobj << dendl;
       m->t.omap_clear(
         coll,
         tobj);
-      dout(0) << "MATTY: ECCOMMON: recovery_omap_setheader tobj=" << tobj
-              << " header_size=" << op.omap_header.length() << dendl;
       m->t.omap_setheader(
         coll,
         tobj,
@@ -1574,7 +1571,7 @@ void ECCommon::RecoveryBackend::continue_recovery_op(
         }
       }
       if (!found_omap_shard) {
-        dout(0) << __func__ << ": ERROR: no shard with clean omap found for "
+        dout(20) << __func__ << ": ERROR: no shard with clean omap found for "
                 << op.hoid << ", canceling recovery" << dendl;
         get_parent()->cancel_pull(op.hoid);
         recovery_ops.erase(op.hoid);
