@@ -429,15 +429,6 @@ void ECBackend::handle_sub_write(
       if (!op.backfill_or_async_recovery) {
         // Track deletes and clones (to non-snap targets) in the journal so we know the generation number
         ec_omap_journal.append_delete(e.soid, e.version.version, e.is_lost_delete());
-        dout(20) << __func__ << " appending delete to journal: "
-                 << (e.is_clone() ? "clone" : "delete")
-                 << " " << e.soid << " version=" << e.version.version
-                 << " lost_delete=" << e.is_lost_delete() << dendl;
-      } else {
-        dout(20) << __func__ << " skipping journal append_delete during backfill/recovery: "
-                 << (e.is_clone() ? "clone" : "delete")
-                 << " " << e.soid << " version=" << e.version.version
-                 << " lost_delete=" << e.is_lost_delete() << dendl;
       }
     }
   }
@@ -456,15 +447,6 @@ void ECBackend::handle_sub_write(
     }
   }
   
-  dout(20) << __func__ << " log_operation: "
-           << "log_entries.size=" << op.log_entries.size()
-           << " updated_hit_set_history=" << (op.updated_hit_set_history ? "present" : "none")
-           << " trim_to=" << op.trim_to
-           << " roll_forward_to=" << op.pg_committed_to
-           << " pg_committed_to=" << op.pg_committed_to
-           << " transaction_applied=" << !op.backfill_or_async_recovery
-           << " async=" << async
-           << dendl;
   get_parent()->log_operation(
     std::move(op.log_entries),
     op.updated_hit_set_history,
@@ -622,9 +604,6 @@ void ECBackend::handle_sub_read(
         reply->omaps_complete[*i] = true;
         dout(20) << __func__ << ": object " << *i
                  << " has no omap flag, skipping omap read" << dendl;
-      } else {
-        dout(20) << __func__ << ": object " << *i
-                 << " has omap flag set" << dendl;
       }
     } catch (ceph::buffer::error& e) {
       dout(5) << __func__ << ": failed to decode OI for " << *i

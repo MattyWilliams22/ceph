@@ -573,8 +573,6 @@ void ECTransaction::apply_omap_to_transactions(
     
     // Apply header update if present
     if (header) {
-      ldpp_dout(dpp, 20) << "apply_omap_to_transactions: omap_setheader oid=" 
-                << target_oid << " header_size=" << header->length() << dendl;
       t.omap_setheader(coll, goid, *header);
     }
     

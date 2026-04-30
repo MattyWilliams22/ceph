@@ -4741,7 +4741,7 @@ void PeeringState::append_log(
       * from the backend and we do not end up in a situation, where the
       * object is deleted before we can _merge_object_divergent_entries().
       */
-    pg_log.skip_rollforward(&info, handler.get(), cct);
+    pg_log.skip_rollforward(&info, handler.get());
     /* Invalidate pwlc for this shard until the next interval when
      * it will be updated with the pwlc from another shard
      */

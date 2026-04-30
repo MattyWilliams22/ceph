@@ -1559,7 +1559,7 @@ void ECCommon::RecoveryBackend::continue_recovery_op(
           if (miter != missing.get_items().end() && miter->second.clean_regions.omap_is_dirty()) {
             dout(20) << __func__ << ": skipping shard " << shard
                      << " for " << op.hoid << " due to dirty omap" << dendl;
-            continue;  // Skip shards with dirty/stale omap
+            continue;
           }
           shard_read_t shard_read;
           shard_read.pg_shard = pg_shards[shard];
@@ -1571,7 +1571,7 @@ void ECCommon::RecoveryBackend::continue_recovery_op(
         }
       }
       if (!found_omap_shard) {
-        dout(20) << __func__ << ": ERROR: no shard with clean omap found for "
+        dout(10) << __func__ << ": ERROR: no shard with clean omap found for "
                 << op.hoid << ", canceling recovery" << dendl;
         get_parent()->cancel_pull(op.hoid);
         recovery_ops.erase(op.hoid);
