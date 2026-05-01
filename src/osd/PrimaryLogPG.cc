@@ -1697,7 +1697,8 @@ bool PrimaryLogPG::get_rw_locks(bool write_ordered, OpContext *ctx)
    * to get the second.
    */
   if (write_ordered && ctx->op->may_read()) {
-    if (ctx->op->may_read_data()) {
+    // In EC, reads can overtake writes unless the RWEXCL lock is held
+    if (ctx->op->may_read_data() || pool.info.is_erasure()) {
       ctx->lock_type = RWState::RWEXCL;
     } else {
       ctx->lock_type = RWState::RWWRITE;
