@@ -52,6 +52,7 @@ set(osd_srcs
   ECUtil.cc
   ECInject.cc
   ECInject.h
+  Coroutines.h
   ECOmapJournal.cc
   ECOmapJournal.h
   ${CMAKE_SOURCE_DIR}/src/common/TrackedOp.cc
