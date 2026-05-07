@@ -573,6 +573,8 @@ void ECTransaction::apply_omap_to_transactions(
     
     // Apply header update if present
     if (header) {
+      ldpp_dout(dpp, 20) << __func__ << ": omap_setheader oid="
+                << target_oid << " header_size=" << header->length() << dendl;
       t.omap_setheader(coll, goid, *header);
     }
     
@@ -604,6 +606,10 @@ void ECTransaction::OmapCloneVisitor::ec_omap(
   bool clear_omap,
   std::optional<ceph::buffer::list> header,
   std::vector<std::pair<OmapUpdateType, ceph::buffer::list>> &updates) {
+  
+  ldpp_dout(dpp, 20) << __func__ << ": src=" << source_oid
+          << " dest=" << dest_oid << " clear_omap=" << clear_omap
+          << " header_size=" << (header ? header->length() : 0) << dendl;
   
   accumulate_omap_updates(
     clear_omap,

@@ -8125,6 +8125,8 @@ int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
       result = 0;
       {
  maybe_create_new_object(ctx);
+ dout(20) << __func__ << ": omap_setheader soid=" << soid
+         << " header_size=" << osd_op.indata.length() << dendl;
  t->omap_setheader(soid, osd_op.indata);
  ctx->clean_regions.mark_omap_dirty();
  ctx->delta_stats.num_wr++;
@@ -8147,6 +8149,8 @@ int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	  break;
 	}
 	if (oi.is_omap()) {
+	  dout(20) << __func__ << ": omap_clear soid=" << soid
+	          << " (header will be cleared)" << dendl;
 	  t->omap_clear(soid);
 	  ctx->clean_regions.mark_omap_dirty();
 	  ctx->delta_stats.num_wr++;
@@ -8295,6 +8299,9 @@ int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	    result = -EINVAL;
 	    break;
 	  }
+	  dout(20) << __func__ << " COPY_FROM operation starting on OSD "
+	           << osd->whoami << " dest=" << soid << " src=" << src
+	           << " src_version=" << src_version << dendl;
 	  CopyFromCallback *cb = new CopyFromCallback(ctx, osd_op);
 	  if (have_truncate)
 	    cb->set_truncate(truncate_seq, truncate_size);
@@ -9519,20 +9526,33 @@ int PrimaryLogPG::do_copy_get(OpContext *ctx, bufferlist::const_iterator& bp,
 
   // omap
   uint32_t omap_keys = 0;
+  dout(20) << __func__ << " omap section start - cursor.omap_offset='" << cursor.omap_offset
+           << "' left=" << left << " cursor.omap_complete=" << cursor.omap_complete
+           << " supports_omap=" << pool.info.supports_omap()
+           << " is_omap=" << oi.is_omap() << dendl;
   if (!pool.info.supports_omap() || !oi.is_omap()) {
     cursor.omap_complete = true;
+    dout(20) << __func__ << " omap_complete set to true (pool doesn't support omap or object has no omap)" << dendl;
   } else {
     if (left > 0 && !cursor.omap_complete) {
       ceph_assert(cursor.data_complete);
       if (cursor.omap_offset.empty()) {
-        const auto r = get_pgbackend()->omap_get_header(ch,
+        dout(20) << __func__ << " reading omap header (cursor.omap_offset is empty)" << dendl;
+        int r = get_pgbackend()->omap_get_header(ch,
           ghobject_t(oi.soid, ghobject_t::NO_GEN, whoami_shard().shard),
           &reply_obj.omap_header, false);
         if (r < 0) {
           ceph_abort();
         }
+        dout(20) << __func__ << " omap_get_header result=" << r
+                 << " header_length=" << reply_obj.omap_header.length() << dendl;
+      } else {
+        dout(20) << __func__ << " NOT reading omap header (cursor.omap_offset='"
+                 << cursor.omap_offset << "' is not empty)" << dendl;
       }
       bufferlist omap_data;
+      dout(20) << __func__ << " calling omap_iterate with cursor.omap_offset='"
+               << cursor.omap_offset << "'" << dendl;
       const auto result = get_pgbackend()->omap_iterate(
         ch, ghobject_t(oi.soid, ghobject_t::NO_GEN, whoami_shard().shard),
         ObjectStore::omap_iter_seek_t{
@@ -9551,18 +9571,33 @@ int PrimaryLogPG::do_copy_get(OpContext *ctx, bufferlist::const_iterator& bp,
           }
           return ObjectStore::omap_iter_ret_t::NEXT;
         });
+      dout(20) << __func__ << " omap_iterate result=" << result << " omap_keys=" << omap_keys << dendl;
       if (result < 0) {
         ceph_abort();
       } else if (const auto more = static_cast<bool>(result); !more) {
         cursor.omap_complete = true;
+        dout(20) << __func__ << " omap_complete set to true (no more keys, omap_iterate returned !more)" << dendl;
         dout(20) << " got omap" << dendl;
+      } else {
+        dout(20) << __func__ << " omap NOT complete (more keys available, stopped due to left=" << left << ")" << dendl;
       }
       if (omap_keys) {
         encode(omap_keys, reply_obj.omap_data);
         reply_obj.omap_data.claim_append(omap_data);
+        dout(20) << __func__ << " encoded " << omap_keys << " omap keys, total omap_data length="
+                 << reply_obj.omap_data.length() << dendl;
+      } else {
+        dout(20) << __func__ << " no omap keys read in this iteration" << dendl;
       }
+    } else {
+      dout(20) << __func__ << " skipping omap read (left=" << left
+               << " cursor.omap_complete=" << cursor.omap_complete << ")" << dendl;
     }
   }
+
+  dout(20) << __func__ << " omap iteration summary: omap_keys_read="
+           << omap_keys << " cursor.omap_complete=" << cursor.omap_complete
+           << " cursor.omap_offset='" << cursor.omap_offset << "'" << dendl;
 
   if (cursor.is_complete()) {
     // include reqids only in the final step.  this is a bit fragile
@@ -9626,6 +9661,10 @@ void PrimaryLogPG::start_copy(CopyCallback *cb, ObjectContextRef obc,
            << " flags " << flags
            << (mirror_snapset ? " mirror_snapset" : "")
            << dendl;
+  dout(20) << __func__ << " initiating copy operation on OSD "
+           << osd->whoami << " dest=" << dest << " src=" << src
+           << " src_pool=" << oloc.pool << " version=" << version << dendl;
+
   ceph_assert(!mirror_snapset || src.snap == CEPH_NOSNAP);
 
   // cancel a previous in-progress copy?
@@ -9834,6 +9873,14 @@ void PrimaryLogPG::process_copy_chunk(hobject_t oid, ceph_tid_t tid, int r)
     return;
   }
 
+  dout(20) << __func__ << " received omap_header length: "
+           << cop->omap_header.length() << " omap_data length: "
+           << cop->omap_data.length() << dendl;
+  dout(20) << __func__ << " cursor state: data_complete="
+           << cop->cursor.data_complete << " attr_complete="
+           << cop->cursor.attr_complete << " omap_complete="
+           << cop->cursor.omap_complete << " is_complete="
+           << cop->cursor.is_complete() << dendl;
 
   if (cop->omap_data.length() || cop->omap_header.length())
     cop->results.has_omap = true;
@@ -10202,6 +10249,8 @@ void PrimaryLogPG::_write_copy_chunk(CopyOpRef cop, PGTransaction *t)
   if (pool.info.supports_omap()) {
     if (!cop->temp_cursor.omap_complete) {
       if (cop->omap_header.length()) {
+        dout(20) << __func__ << " writing omap_header to transaction, length="
+                 << cop->omap_header.length() << " temp_oid=" << cop->results.temp_oid << dendl;
         t->omap_setheader(
           cop->results.temp_oid,
           cop->omap_header);
@@ -10211,6 +10260,8 @@ void PrimaryLogPG::_write_copy_chunk(CopyOpRef cop, PGTransaction *t)
         map<string,bufferlist> omap;
         bufferlist::const_iterator p = cop->omap_data.begin();
         decode(omap, p);
+        dout(20) << __func__ << " writing omap_data to transaction, "
+                 << omap.size() << " keys, temp_oid=" << cop->results.temp_oid << dendl;
         t->omap_setkeys(cop->results.temp_oid, omap);
         cop->omap_data.clear();
       }
@@ -10226,6 +10277,10 @@ void PrimaryLogPG::finish_copyfrom(CopyFromCallback *cb)
 {
   OpContext *ctx = cb->ctx;
   dout(20) << "finish_copyfrom on " << ctx->obs->oi.soid << dendl;
+  dout(20) << __func__ << " COPY_FROM operation completing on OSD "
+           << osd->whoami << " dest=" << ctx->obs->oi.soid
+           << " final_size=" << cb->get_data_size() << dendl;
+
   ObjectState& obs = ctx->new_obs;
   if (obs.exists) {
     dout(20) << __func__ << ": exists, removing" << dendl;

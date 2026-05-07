@@ -1185,9 +1185,12 @@ void ECCommon::RecoveryBackend::handle_recovery_push(
       op.attrset);
     if (get_parent()->get_pool().supports_omap() &&
         !sinfo.is_nonprimary_shard(get_parent()->whoami_shard().shard)) {
+      dout(20) << __func__ << ": recovery_omap_clear tobj=" << tobj << dendl;
       m->t.omap_clear(
         coll,
         tobj);
+      dout(20) << __func__ << ": recovery_omap_setheader tobj=" << tobj
+              << " header_size=" << op.omap_header.length() << dendl;
       m->t.omap_setheader(
         coll,
         tobj,

@@ -4741,7 +4741,11 @@ void PeeringState::append_log(
       * from the backend and we do not end up in a situation, where the
       * object is deleted before we can _merge_object_divergent_entries().
       */
-    pg_log.skip_rollforward(&info, handler.get());
+    psdout(20) << __func__ << " skip_rollforward starting, can_rollback_to="
+        << pg_log.get_can_rollback_to() << " head=" << pg_log.get_head() << dendl;
+    pg_log.skip_rollforward(&info, handler.get(), cct);
+    psdout(20) << __func__ << " skip_rollforward completed, can_rollback_to="
+        << pg_log.get_can_rollback_to() << dendl;
     /* Invalidate pwlc for this shard until the next interval when
      * it will be updated with the pwlc from another shard
      */
@@ -4762,6 +4766,10 @@ void PeeringState::append_log(
      * here past last_backfill.  It's ok for the same reason as
      * above */
     if (transaction_applied && !is_acting(pg_whoami)) {
+      psdout(20) << __func__
+             << ": rolling forward past last_backfill, soid="
+             << p->soid << " last_backfill=" << info.last_backfill
+             << " entry=" << *p << dendl;
       pg_log.roll_forward(&info, handler.get());
     }
   }
