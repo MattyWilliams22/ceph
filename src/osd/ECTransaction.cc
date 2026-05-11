@@ -711,7 +711,7 @@ ECTransaction::Generate::Generate(PGTransaction &t,
     ceph_assert(oid.is_temp());
   }
 
-  if (entry && entry->is_modify() && op.updated_snaps) {
+  if (entry && (entry->is_modify() || entry->is_replace()) && op.updated_snaps) {
     bufferlist bl(op.updated_snaps->second.size() * 8 + 8);
     encode(op.updated_snaps->second, bl);
     entry->snaps.swap(bl);

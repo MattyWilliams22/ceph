@@ -428,7 +428,7 @@ void ECBackend::handle_sub_write(
   // Update EC omap journal on non-primary shards from log entries
   // This ensures the journal has the correct generation info when transactions are applied
   for (auto &&e: op.log_entries) {
-    if (e.is_delete() || e.is_lost_delete() || (e.is_clone() && !e.soid.is_snap())) {
+    if (e.is_delete() || e.is_lost_delete() || e.is_replace() || (e.is_clone() && !e.soid.is_snap())) {
       if (!op.backfill_or_async_recovery) {
         // Track deletes and clones (to non-snap targets) in the journal so we know the generation number
         ec_omap_journal.append_delete(e.soid, e.version.version, e.is_lost_delete());

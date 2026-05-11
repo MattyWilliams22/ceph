@@ -9164,10 +9164,15 @@ int PrimaryLogPG::prepare_transaction(OpContext *ctx)
   if (soid.snap == CEPH_NOSNAP)
     make_writeable(ctx);
 
-  finish_ctx(ctx,
-	     ctx->new_obs.exists ? pg_log_entry_t::MODIFY :
-	     pg_log_entry_t::DELETE,
-	     result);
+  int log_op_type;
+  if (ctx->use_replace_op) {
+    log_op_type = pg_log_entry_t::REPLACE;
+  } else {
+    log_op_type = ctx->new_obs.exists ? pg_log_entry_t::MODIFY :
+                  pg_log_entry_t::DELETE;
+  }
+
+  finish_ctx(ctx, log_op_type, result);
 
   return result;
 }
@@ -10285,6 +10290,7 @@ void PrimaryLogPG::finish_copyfrom(CopyFromCallback *cb)
   if (obs.exists) {
     dout(20) << __func__ << ": exists, removing" << dendl;
     ctx->op_t->remove(obs.oi.soid);
+    ctx->use_replace_op = true;
   } else {
     ctx->delta_stats.num_objects++;
     obs.exists = true;
