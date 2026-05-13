@@ -502,15 +502,86 @@ ECOmapJournal::RangeMapType ECOmapJournal::get_removed_ranges(const hobject_t &h
   return merged_ranges;
 }
 
+void ECOmapJournal::clear_entries_before_version(
+  const hobject_t &hoid,
+  const std::optional<version_t> version) {
+
+  // Remove unprocessed entries
+  if (auto entries_it = entries.find(hoid); entries_it != entries.end()) {
+    if (!version) {
+      // Remove all entries
+      entries.erase(entries_it);
+    } else {
+      // Remove only entries with version < specified version
+      auto &entry_list = entries_it->second;
+      for (auto it = entry_list.begin(); it != entry_list.end(); ) {
+        if (it->version.version < *version) {
+          it = entry_list.erase(it);
+        } else {
+          ++it;
+        }
+      }
+      if (entry_list.empty()) {
+        entries.erase(entries_it);
+      }
+    }
+  }
+
+  // Remove processed key map entries
+  if (auto key_it = key_map.find(hoid); key_it != key_map.end()) {
+    if (!version) {
+      // Remove all entries
+      key_map.erase(key_it);
+    } else {
+      // Remove only entries with version < specified version
+      for (auto it = key_it->second.begin(); it != key_it->second.end(); ) {
+        if (it->second.version.version < *version) {
+          it = key_it->second.erase(it);
+        } else {
+          ++it;
+        }
+      }
+      if (key_it->second.empty()) {
+        key_map.erase(key_it);
+      }
+    }
+  }
+
+  // Remove removed ranges
+  if (auto ranges_it = removed_ranges_map.find(hoid); ranges_it != removed_ranges_map.end()) {
+    if (!version) {
+      // Remove all entries
+      removed_ranges_map.erase(ranges_it);
+    } else {
+      // Remove only entries with version < specified version
+      auto &ranges_list = ranges_it->second;
+      for (auto it = ranges_list.begin(); it != ranges_list.end(); ) {
+        if (it->version.version < *version) {
+          it = ranges_list.erase(it);
+        } else {
+          ++it;
+        }
+      }
+      if (ranges_list.empty()) {
+        removed_ranges_map.erase(ranges_it);
+      }
+    }
+  }
+
+  // Remove header
+  if (auto header_it = header_map.find(hoid); header_it != header_map.end()) {
+    if (!version || header_it->second.version.version < *version) {
+      header_map.erase(header_it);
+    }
+  }
+}
+
 void ECOmapJournal::append_delete(
   const hobject_t &hoid,
   const version_t version,
   const bool lost_delete) {
-  entries.erase(hoid);
-  key_map.erase(hoid);
-  removed_ranges_map.erase(hoid);
-  header_map.erase(hoid);
-  
+  clear_entries_before_version(hoid, version);
+
   auto [it, inserted] = object_state_map.try_emplace(hoid, std::map<version_t, bool>{});
   it->second.insert({version, lost_delete});
   
@@ -523,18 +594,18 @@ void ECOmapJournal::append_delete(
                       << dendl;
 }
 
-void ECOmapJournal::append_create(const hobject_t &hoid) {
-  entries.erase(hoid);
-  key_map.erase(hoid);
-  removed_ranges_map.erase(hoid);
-  header_map.erase(hoid);
+void ECOmapJournal::append_create(const hobject_t &hoid, const version_t version) {
+  clear_entries_before_version(hoid, version);
+  ldpp_dout(&dpp, 20) << __func__ << ": hoid=" << hoid
+                     << " version=" << version
+                     << dendl;
 }
 
-void ECOmapJournal::append_whiteout(const hobject_t &hoid) {
-  entries.erase(hoid);
-  key_map.erase(hoid);
-  removed_ranges_map.erase(hoid);
-  header_map.erase(hoid);
+void ECOmapJournal::append_whiteout(const hobject_t &hoid, const version_t version) {
+  clear_entries_before_version(hoid, version);
+  ldpp_dout(&dpp, 20) << __func__ << ": hoid=" << hoid
+                     << " version=" << version
+                     << dendl;
 }
 
 void ECOmapJournal::trim_delete(const hobject_t &hoid, const version_t version) {

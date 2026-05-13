@@ -587,7 +587,7 @@ TEST(ecomapjournal, append_create_clears_entries)
   ASSERT_EQ(2u, journal.entries_size(test_hoid));
   
   // Create the object
-  journal.append_create(test_hoid);
+  journal.append_create(test_hoid, 3);
   
   // All entries should be cleared
   ASSERT_EQ(0u, journal.entries_size(test_hoid));
@@ -685,7 +685,7 @@ TEST(ecomapjournal, delete_then_create_workflow)
   ASSERT_EQ(1u, journal.entries_size(test_hoid));
   
   // Create object (simulating recreation)
-  journal.append_create(test_hoid);
+  journal.append_create(test_hoid, 7);
   ASSERT_EQ(0u, journal.entries_size(test_hoid));
   
   // Object should still have the delete version tracked
@@ -792,7 +792,7 @@ TEST(ecomapjournal, append_whiteout_clears_entries)
   ASSERT_EQ(2u, journal.entries_size(test_hoid));
   
   // Whiteout the object
-  journal.append_whiteout(test_hoid);
+  journal.append_whiteout(test_hoid, 3);
   
   // All entries should be cleared
   ASSERT_EQ(0u, journal.entries_size(test_hoid));
@@ -813,7 +813,7 @@ TEST(ecomapjournal, append_whiteout_clears_processed_entries)
   ASSERT_FALSE(updates.empty());
   
   // Whiteout the object - should clear processed entries too
-  journal.append_whiteout(test_hoid);
+  journal.append_whiteout(test_hoid, 2);
   
   // Get updates again - should be empty
   auto [updates2, ranges2] = journal.get_value_updates(test_hoid);
@@ -839,7 +839,7 @@ TEST(ecomapjournal, append_whiteout_clears_header)
   ASSERT_TRUE(header.has_value());
   
   // Whiteout the object
-  journal.append_whiteout(test_hoid);
+  journal.append_whiteout(test_hoid, 2);
   
   // Header should be cleared
   std::optional<ceph::buffer::list> header2 = journal.get_updated_header(test_hoid);
@@ -853,7 +853,7 @@ TEST(ecomapjournal, append_whiteout_on_nonexistent_object)
   const hobject_t test_hoid("test_whiteout_nonexist", CEPH_NOSNAP, 1, 0, "test_namespace");
   
   // Whiteout on non-existent object should not crash
-  journal.append_whiteout(test_hoid);
+  journal.append_whiteout(test_hoid, 2);
   
   // Should still be empty
   ASSERT_EQ(0u, journal.entries_size(test_hoid));
@@ -870,7 +870,7 @@ TEST(ecomapjournal, append_whiteout_followed_by_new_entries)
   ASSERT_EQ(1u, journal.entries_size(test_hoid));
   
   // Whiteout
-  journal.append_whiteout(test_hoid);
+  journal.append_whiteout(test_hoid, 2);
   ASSERT_EQ(0u, journal.entries_size(test_hoid));
   
   // Add new entries after whiteout
@@ -898,7 +898,7 @@ TEST(ecomapjournal, append_whiteout_does_not_affect_generation)
   journal.add_entry(test_hoid, create_insert_entry(eversion_t(1, 6), 1, 10));
   
   // Whiteout should clear entries but not generation
-  journal.append_whiteout(test_hoid);
+  journal.append_whiteout(test_hoid, 7);
   
   auto [gen2, lost2] = journal.get_generation(test_hoid);
   ASSERT_EQ(5u, gen2);
@@ -916,11 +916,11 @@ TEST(ecomapjournal, whiteout_create_delete_workflow)
   ASSERT_EQ(1u, journal.entries_size(test_hoid));
   
   // Whiteout
-  journal.append_whiteout(test_hoid);
+  journal.append_whiteout(test_hoid, 2);
   ASSERT_EQ(0u, journal.entries_size(test_hoid));
   
   // Create
-  journal.append_create(test_hoid);
+  journal.append_create(test_hoid, 2);
   ASSERT_EQ(0u, journal.entries_size(test_hoid));
   
   // Add more entries
@@ -1205,7 +1205,7 @@ TEST(ecomapjournal, multiple_objects_interleaved_operations)
   journal.add_entry(hoid2, create_insert_entry(eversion_t(1, 1), 20, 30));
   journal.append_delete(hoid3, 5, false);
   journal.add_entry(hoid1, create_insert_entry(eversion_t(1, 2), 11, 20));
-  journal.append_whiteout(hoid2);
+  journal.append_whiteout(hoid2, 6);
   
   // Verify each object's state
   ASSERT_EQ(2u, journal.entries_size(hoid1));

@@ -747,7 +747,7 @@ ECTransaction::Generate::Generate(PGTransaction &t,
   if (op.is_fresh_object() && entry) {
     entry->mod_desc.create();
     if (osdmap->get_pg_pool(pgid.pool())->supports_omap()) {
-      ec_omap_journal.append_create(plan.hoid);
+      ec_omap_journal.append_create(plan.hoid, entry->version.version);
     }
   }
 
@@ -814,8 +814,8 @@ ECTransaction::Generate::Generate(PGTransaction &t,
 
   if (create_whiteout) {
     ldpp_dout(dpp, 10) << __func__ << " detecting whiteout creation for " << oid << dendl;
-    if (osdmap->get_pg_pool(pgid.pool())->supports_omap()) {
-      ec_omap_journal.append_whiteout(plan.hoid);
+    if (osdmap->get_pg_pool(pgid.pool())->supports_omap() && entry) {
+      ec_omap_journal.append_whiteout(plan.hoid, entry->version.version);
     }
   }
 

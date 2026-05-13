@@ -106,7 +106,7 @@ class ECOmapJournal {
   using RangeMapType = std::map<std::string, std::optional<std::string>>;
   using const_iterator = std::list<ECOmapJournalEntry>::const_iterator;
  private:
-  // Unprocessed journal entries 
+  // Unprocessed journal entries
   std::map<hobject_t, std::list<ECOmapJournalEntry>> entries;
 
   // Processed journal entries
@@ -129,6 +129,7 @@ class ECOmapJournal {
   bool remove_processed_entry_by_version(const hobject_t &hoid, const eversion_t version);
   UpdateMapType get_key_map(const hobject_t &hoid) const;
   RangeMapType get_removed_ranges(const hobject_t &hoid) const;
+  void clear_entries_before_version(const hobject_t &hoid, const std::optional<version_t> version);
 
  public:
   explicit ECOmapJournal(const DoutPrefixProvider& dpp_) : dpp(dpp_) {}
@@ -144,8 +145,8 @@ class ECOmapJournal {
   std::tuple<UpdateMapType, RangeMapType> get_value_updates(const hobject_t &hoid);
   std::optional<ceph::buffer::list> get_updated_header(const hobject_t &hoid);
   void append_delete(const hobject_t &hoid, const version_t version, const bool lost_delete);
-  void append_create(const hobject_t &hoid);
-  void append_whiteout(const hobject_t &hoid);
+  void append_create(const hobject_t &hoid, const version_t version);
+  void append_whiteout(const hobject_t &hoid, const version_t version);
   void trim_delete(const hobject_t &hoid, const version_t version);
   std::pair<gen_t, bool> get_generation(const hobject_t &hoid) const;
 
