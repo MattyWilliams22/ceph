@@ -4825,8 +4825,10 @@ void PeeringState::append_log(
     /* We don't want to leave the rollforward artifacts around
      * here past last_backfill.  It's ok for the same reason as
      * above */
-    if (transaction_applied &&
-	p->soid > info.last_backfill) {
+    if (transaction_applied && !is_acting(pg_whoami)) {
+      psdout(20) << __func__
+             << ": rolling forward because of backfill/async_recovery, soid="
+             << p->soid << " entry=" << *p << dendl;
       pg_log.roll_forward(&info, handler.get());
     }
   }
