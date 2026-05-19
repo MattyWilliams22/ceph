@@ -133,20 +133,22 @@ void OmapTest::after_pool_create(PoolType type,
 void OmapTest::SetUp()
 {
   SKIP_IF_CRIMSON();
-  // Skip EC pools before creating resources
-  if (GetParam() == PoolType::FAST_EC) {
-    GTEST_SKIP() << "EC pools do not support omap yet";
-  }
+
+  // Call base class SetUp to create pool and ioctx
   PoolTypeTestFixture::SetUp();
-  balancing_disabled = false;
+  
+  nspace = get_temp_pool_name();
+  ioctx.set_namespace(nspace);
+  
+  // Enable omap for Fast EC pools
+  if (pool_type == PoolType::FAST_EC) {
+    enable_omap_for_pool(pool_name, rados);
+  }
 }
 
 void OmapTest::TearDown()
 {
   SKIP_IF_CRIMSON();
-  if (GetParam() == PoolType::FAST_EC) {
-    GTEST_SKIP() << "EC pools do not support omap yet";
-  }
 
   if (balancing_disabled) {
     turn_balancing_on();
