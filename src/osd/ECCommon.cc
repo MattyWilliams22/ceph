@@ -485,28 +485,32 @@ void ECCommon::ReadPipeline::do_read_op(ReadOp &rop) {
     for (auto &&[shard, shard_read]: read_request.shard_reads) {
       if (need_attrs && !sinfo.is_nonprimary_shard(shard)) {
         messages[shard_read.pg_shard].attrs_to_read.insert(hoid);
+        reads_sent = true;
         need_attrs = false;
       }
       if (need_omap_header && !sinfo.is_nonprimary_shard(shard)) {
         messages[shard_read.pg_shard].omap_headers_to_read.insert(hoid);
+        reads_sent = true;
         need_omap_header = false;
       }
       if (need_omap_keys && !sinfo.is_nonprimary_shard(shard)) {
         messages[shard_read.pg_shard].omap_read_from.insert(
           {hoid, {read_request.omap_read_from, read_request.omap_max_bytes}});
+        reads_sent = true;
         need_omap_keys = false;
       }
       if (shard_read.subchunk) {
         messages[shard_read.pg_shard].subchunks[hoid] = *shard_read.subchunk;
+        reads_sent = true;
       } else {
         static const std::vector default_sub_chunk = {make_pair(0, 1)};
         messages[shard_read.pg_shard].subchunks[hoid] = default_sub_chunk;
+        reads_sent = true;
       }
       rop.obj_to_source[hoid].insert(shard_read.pg_shard);
       rop.source_to_obj[shard_read.pg_shard].insert(hoid);
     }
     for (auto &[_, shard_read]: read_request.shard_reads) {
-      ceph_assert(!shard_read.extents.empty());
       rop.debug_log.emplace_back(ECUtil::READ_REQUEST, shard_read.pg_shard,
                                    shard_read.extents);
       for (auto &[start, len]: shard_read.extents) {
