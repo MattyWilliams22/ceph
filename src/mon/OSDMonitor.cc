@@ -9053,7 +9053,7 @@ int OSDMonitor::prepare_command_pool_set(const cmdmap_t& cmdmap,
       return -EINVAL;
     }
     // This restriction is temporary until omap support is well tested in Fast EC pools
-    if ((val == "true") && p.is_erasure()) {
+    if ((val == "true") && !p.allows_ecoptimizations()) {
       ss << "supports_omap cannot be enabled in ec pools";
       return -EINVAL;
     }
