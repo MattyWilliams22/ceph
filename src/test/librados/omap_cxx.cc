@@ -46,10 +46,6 @@ protected:
 
   void SetUp() override {
     SKIP_IF_CRIMSON();
-    // Skip EC pools before creating resources
-    if (GetParam() == PoolType::FAST_EC) {
-      GTEST_SKIP() << "EC pools do not support omap yet";
-    }
     // Call base class SetUp to create pool and ioctx
     PoolTypeTestFixture::SetUp();
     
@@ -64,9 +60,6 @@ protected:
   
   void TearDown() override {
     SKIP_IF_CRIMSON();
-    if (GetParam() == PoolType::FAST_EC) {
-      GTEST_SKIP() << "EC pools do not support omap yet";
-    }
     // Call base class TearDown to clean up pool
     PoolTypeTestFixture::TearDown();
   }
@@ -590,6 +583,62 @@ TEST_P(OmapTest, NoOmapRecovery) {
   ret = ioctx.operate("no_omap_oid", &read, nullptr);
   EXPECT_EQ(ret, 0);
   EXPECT_EQ(0, memcmp(bl_read.c_str(), "ceph", 4));
+
+  turn_balancing_on();
+}
+
+TEST_P(OmapTest, NoOmapRecoveryZeroSized) {
+  SKIP_IF_CRIMSON();
+  turn_balancing_off();
+  bufferlist bl_write;
+  // Empty buffer for zero-sized object
+
+  // 1. Write zero-sized object using write_full
+  ObjectWriteOperation write1;
+  write1.write_full(bl_write);
+  int ret = ioctx.operate("no_omap_oid_zero", &write1);
+  EXPECT_EQ(ret, 0);
+
+  // Verify object exists (even if zero-sized)
+  uint64_t size;
+  time_t mtime;
+  ret = ioctx.stat("no_omap_oid_zero", &size, &mtime);
+  ASSERT_EQ(ret, 0) << "Object does not exist after write_full";
+  EXPECT_EQ(size, 0) << "Object should be zero-sized";
+
+  // 2. Find up osds
+  ceph::messaging::osd::OSDMapReply reply;
+  int res = request_osd_map("no_omap_oid_zero", &reply);
+  EXPECT_TRUE(res == 0);
+  std::vector<int> prev_up_osds = reply.up;
+  std::string pgid = reply.pgid;
+  print_osd_map("Previous up osds: ", prev_up_osds);
+
+  // 3. Swap first and last osds to form new upmap
+  ASSERT_FALSE(prev_up_osds.empty()) << "up vector is empty - object may not exist";
+  int prev_primary = prev_up_osds[0];
+  std::vector<int> new_up_osds = prev_up_osds;
+  std::swap(new_up_osds[0], new_up_osds[new_up_osds.size() - 1]);
+  int new_primary = new_up_osds[0];
+  std::cout << "Previous primary osd: " << prev_primary << std::endl;
+  std::cout << "New primary osd: " << new_primary << std::endl;
+  print_osd_map("Desired up osds: ", new_up_osds);
+
+  // 4. Set new up map
+  int rc = set_osd_upmap(pgid, new_up_osds);
+  EXPECT_TRUE(rc == 0);
+
+  // 5. Wait for new upmap to appear as acting set of osds
+  int res2 = wait_for_upmap("no_omap_oid_zero", new_primary, 60s);
+  EXPECT_TRUE(res2 == 0);
+
+  // 6. Read data (should be empty for zero-sized object)
+  bufferlist bl_read;
+  ObjectReadOperation read;
+  read.read(0, 0, &bl_read, nullptr);
+  ret = ioctx.operate("no_omap_oid_zero", &read, nullptr);
+  EXPECT_EQ(ret, 0);
+  EXPECT_EQ(bl_read.length(), 0);
 
   turn_balancing_on();
 }
