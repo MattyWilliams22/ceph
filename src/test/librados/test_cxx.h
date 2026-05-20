@@ -23,3 +23,9 @@ std::string connect_cluster_pp(librados::Rados &cluster,
 			       const std::map<std::string, std::string> &config);
 int destroy_one_pool_pp(const std::string &pool_name, librados::Rados &cluster);
 int destroy_one_ec_pool_pp(const std::string &pool_name, librados::Rados &cluster);
+
+std::string create_pool_pp(const std::string &pool_name, librados::Rados &cluster);
+std::string create_ec_pool_pp(const std::string &pool_name, librados::Rados &cluster,
+                              bool optimised_ec = false, bool enable_omap = false);
+int destroy_pool_pp(const std::string &pool_name, librados::Rados &cluster);
+int destroy_ec_pool_pp(const std::string &pool_name, librados::Rados &cluster);
