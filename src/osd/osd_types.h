@@ -1329,7 +1329,7 @@ struct pg_pool_t {
     FLAG_CRIMSON = 1<<18,
     FLAG_EC_OPTIMIZATIONS = 1<<19, // enable optimizations, once enabled, cannot be disabled
     FLAG_CLIENT_SPLIT_READS = 1<<20, // Optimized EC is permitted to do direct reads.
-    FLAG_OMAP = 1<<22, // Pool is required to perform OMAP operations
+    FLAG_OMAP = 1<<21, // Pool is required to perform OMAP operations
   };
 
   static const char *get_flag_name(uint64_t f) {
