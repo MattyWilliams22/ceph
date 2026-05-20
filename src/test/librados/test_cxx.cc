@@ -240,3 +240,104 @@ int destroy_one_ec_pool_pp(const std::string &pool_name, Rados &cluster)
   cluster.shutdown();
   return ret;
 }
+
+// New functions that don't call shutdown() - for use with shared cluster objects
+std::string create_pool_pp(const std::string &pool_name, Rados &cluster) {
+  int ret = cluster.pool_create(pool_name.c_str());
+  if (ret) {
+    std::ostringstream oss;
+    oss << "cluster.pool_create(" << pool_name << ") failed with error " << ret;
+    return oss.str();
+  }
+
+  IoCtx ioctx;
+  ret = cluster.ioctx_create(pool_name.c_str(), ioctx);
+  if (ret < 0) {
+    std::ostringstream oss;
+    oss << "cluster.ioctx_create(" << pool_name << ") failed with error "
+        << ret;
+    return oss.str();
+  }
+  ioctx.application_enable("rados", true);
+  return "";
+}
+
+std::string create_ec_pool_pp(const std::string &pool_name, Rados &cluster, 
+                              bool optimised_ec, bool enable_omap) {
+  std::ostringstream oss;
+  int ret = destroy_ec_profile_and_rule_pp(cluster, pool_name, oss);
+  if (ret) {
+    return oss.str();
+  }
+
+  ret = cluster.mon_command(
+    "{\"prefix\": \"osd erasure-code-profile set\", \"name\": \"testprofile-" + pool_name + "\", \"profile\": [ \"k=2\", \"m=1\", \"crush-failure-domain=osd\"]}",
+    {}, NULL, NULL);
+  if (ret) {
+    oss << "mon_command erasure-code-profile set name:testprofile-" << pool_name << " failed with error " << ret;
+    return oss.str();
+  }
+
+  ret = cluster.mon_command(
+    "{\"prefix\": \"osd pool create\", \"pool\": \"" + pool_name + "\", \"pool_type\":\"erasure\", \"pg_num\":8, \"pgp_num\":8, \"erasure_code_profile\":\"testprofile-" + pool_name + "\"}",
+    {}, NULL, NULL);
+  if (ret) {
+    destroy_ec_profile_pp(cluster, pool_name, oss);
+    oss << "mon_command osd pool create pool:" << pool_name << " pool_type:erasure failed with error " << ret;
+    return oss.str();
+  }
+
+  if (optimised_ec) {
+    bufferlist inbl;
+    ret = cluster.mon_command(
+      "{\"prefix\": \"osd pool set\", \"pool\": \"" + pool_name +
+      "\", \"var\": \"allow_ec_optimizations\", \"val\": \"true\"}",
+      std::move(inbl), nullptr, nullptr);
+    if (ret) {
+      destroy_pool_pp(pool_name, cluster);
+      destroy_ec_profile_pp(cluster, pool_name, oss);
+      oss << "mon_command osd pool set allow_ec_optimizations failed with error " << ret;
+      return oss.str();
+    }
+
+    if (enable_omap) {
+      bufferlist inbl2, outbl;
+      std::ostringstream oss2;
+      oss2 << "{\"prefix\": \"osd pool set\", \"pool\": \"" << pool_name
+          << "\", \"var\": \"supports_omap\", \"val\": \"true\"}";
+      ret = cluster.mon_command(oss2.str(), std::move(inbl2), &outbl, nullptr);
+      if (ret) {
+        destroy_pool_pp(pool_name, cluster);
+        destroy_ec_profile_pp(cluster, pool_name, oss);
+        oss << "mon_command osd pool set supports_omap failed with error " << ret;
+        return oss.str();
+      }
+    }
+  }
+
+  cluster.wait_for_latest_osdmap();
+  return "";
+}
+
+int destroy_pool_pp(const std::string &pool_name, Rados &cluster) {
+  return cluster.pool_delete(pool_name.c_str());
+}
+
+int destroy_ec_pool_pp(const std::string &pool_name, Rados &cluster) {
+  int ret = cluster.pool_delete(pool_name.c_str());
+  if (ret) {
+    return ret;
+  }
+
+  CephContext *cct = static_cast<CephContext*>(cluster.cct());
+  if (!cct->_conf->mon_fake_pool_delete) { // hope this is in [global]
+    std::ostringstream oss;
+    ret = destroy_ec_profile_and_rule_pp(cluster, pool_name, oss);
+    if (ret) {
+      return ret;
+    }
+  }
+
+  cluster.wait_for_latest_osdmap();
+  return 0;
+}
