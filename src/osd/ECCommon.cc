@@ -362,6 +362,20 @@ int ECCommon::ReadPipeline::get_remaining_shards(
     bool want_attrs,
     bool want_omap_header,
     bool want_omap_keys) {
+  dout(0) << __func__ << " called with:"
+          << " hoid=" << hoid
+          << " for_recovery=" << for_recovery
+          << " want_attrs=" << want_attrs
+          << " want_omap_header=" << want_omap_header
+          << " want_omap_keys=" << want_omap_keys
+          << " read_result.r=" << read_result.r
+          << " read_result.errors.size=" << read_result.errors.size()
+          << " read_result.omap_complete=" << read_result.omap_complete
+          << " read_request.want_attrs=" << read_request.want_attrs
+          << " read_request.want_omap_header=" << read_request.want_omap_header
+          << " read_request.want_omap_keys=" << read_request.want_omap_keys
+          << " read_request.shard_reads.size=" << read_request.shard_reads.size()
+          << dendl;
   if (want_omap_header || want_omap_keys) {
     ceph_assert(get_parent()->get_pool().supports_omap());
   }
@@ -417,6 +431,7 @@ int ECCommon::ReadPipeline::get_remaining_shards(
 
   if (need_attr_request) {
     int r = ensure_primary_shard_for_omap(hoid, read_request, for_recovery, error_shards);
+    dout(0) << __func__ << " ensure_primary_shard_for_omap returned r=" << r << dendl;
     if (r != 0) {
       return r;
     }
@@ -456,6 +471,8 @@ int ECCommon::ReadPipeline::ensure_primary_shard_for_omap(
           continue;
         }
       }
+      dout(0) << __func__ << ": selected existing shard " << shard_id
+              << " (pg_shard=" << shard_read.pg_shard << ") for omap read of " << hoid << dendl;
       dout(20) << __func__ << ": existing shard " << shard_id
                << " can handle omap read for " << hoid << dendl;
       return 0;
@@ -483,6 +500,8 @@ int ECCommon::ReadPipeline::ensure_primary_shard_for_omap(
       shard_read_t shard_read;
       shard_read.pg_shard = pg_shards[shard];
       read_request.shard_reads.insert(shard, shard_read);
+      dout(0) << __func__ << ": selected and added new shard " << shard
+              << " (pg_shard=" << pg_shards[shard] << ") for omap read of " << hoid << dendl;
       dout(20) << __func__ << ": added shard " << shard
                << " for omap read of " << hoid << dendl;
       return 0;

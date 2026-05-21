@@ -792,16 +792,34 @@ void ECBackend::handle_sub_read_reply(
   }
   ReadOp &rop = iter->second;
   if (cct->_conf->bluestore_debug_inject_read_err) {
-    for (auto i = op.buffers_read.begin();
-         i != op.buffers_read.end();
-         ++i) {
+    set<hobject_t> all_read_objects;
+    for (auto &[hoid, _] : op.buffers_read) {
+      all_read_objects.insert(hoid);
+    }
+    for (auto &[hoid, _] : op.attrs_read) {
+      all_read_objects.insert(hoid);
+    }
+    for (auto &[hoid, _] : op.omap_headers_read) {
+      all_read_objects.insert(hoid);
+    }
+    for (auto &[hoid, _] : op.omap_entries_read) {
+      all_read_objects.insert(hoid);
+    }
+    for (auto &[hoid, _] : op.omaps_complete) {
+      all_read_objects.insert(hoid);
+    }
+    
+    for (const auto &hoid : all_read_objects) {
       if (ECInject::test_read_error0(
-        ghobject_t(i->first, ghobject_t::NO_GEN, op.from.shard))) {
+        ghobject_t(hoid, ghobject_t::NO_GEN, op.from.shard))) {
         dout(0) << __func__ << " Error inject - EIO error for shard "
                 << op.from.shard << dendl;
-        op.buffers_read.erase(i->first);
-        op.attrs_read.erase(i->first);
-        op.errors[i->first] = -EIO;
+        op.buffers_read.erase(hoid);
+        op.attrs_read.erase(hoid);
+        op.omap_headers_read.erase(hoid);
+        op.omap_entries_read.erase(hoid);
+        op.omaps_complete.erase(hoid);
+        op.errors[hoid] = -EIO;
         rop.debug_log.emplace_back(ECUtil::INJECT_EIO, op.from);
       }
     }
