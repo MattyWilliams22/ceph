@@ -3,20 +3,22 @@
 
 #include <common/perf_counters_collection.h>
 
-#include "test/librados/test_cxx.h"
-#include "test/librados/test_pool_types.h"
-#include "crimson_utils.h"
+#include <algorithm>
+#include <chrono>
+#include <climits>
+#include <iostream>
+#include <thread>
+
+#include <boost/asio/io_context.hpp>
+
 #include "cls/fifo/cls_fifo_ops.h"
 #include "cls/version/cls_version_ops.h"
 #include "common/json/OSDStructures.h"
 #include "librados/librados_asio.h"
+#include "test/librados/test_cxx.h"
+#include "test/librados/test_pool_types.h"
 
-#include <boost/asio/io_context.hpp>
-
-#include <algorithm>
-#include <climits>
-#include <thread>
-#include <chrono>
+#include "crimson_utils.h"
 
 using namespace std;
 using namespace librados;
@@ -31,14 +33,23 @@ protected:
   static void after_pool_create(PoolType type,
                                 const std::string& pname,
                                 librados::Rados& cluster);
+  static void SetUpTestSuite();
+  static void TearDownTestSuite();
   void SetUp() override;
   void TearDown() override;
   static void enable_omap_for_pool(const std::string& pname,
                                    librados::Rados& cluster);
+  static void enable_read_error_injection();
+  static void disable_read_error_injection();
   void turn_balancing_off();
   void turn_balancing_on();
   int request_osd_map(
       std::string oid,
+      ceph::messaging::osd::OSDMapReply* reply);
+  int request_osd_map(
+      std::string oid,
+      const std::string& pname,
+      const std::string& ns,
       ceph::messaging::osd::OSDMapReply* reply);
   int set_osd_upmap(
       std::string pgid,
@@ -47,8 +58,25 @@ protected:
       std::string oid,
       int desired_primary,
       std::chrono::seconds timeout);
+  int wait_for_upmap(
+      std::string oid,
+      const std::string& pname,
+      const std::string& ns,
+      int desired_primary,
+      std::chrono::seconds timeout);
   void print_osd_map(std::string message, std::vector<int> osd_vec);
+  int inject_read_error(
+      const std::string& oid,
+      int target_osd,
+      PoolType pool_type);
   void check_omap_read(
+      std::string oid,
+      std::string first_omap_key,
+      std::string first_omap_value,
+      int expected_size,
+      int expected_err);
+  void check_omap_read(
+      IoCtx& ctx,
       std::string oid,
       std::string first_omap_key,
       std::string first_omap_value,
@@ -57,6 +85,11 @@ protected:
 
   // Helper to create test object with omap data
   void create_test_object_with_omap(
+      const std::string& oid,
+      const std::map<std::string, bufferlist>& omap_map,
+      const bufferlist& omap_header);
+  void create_test_object_with_omap(
+      IoCtx& ctx,
       const std::string& oid,
       const std::map<std::string, bufferlist>& omap_map,
       const bufferlist& omap_header);
@@ -127,6 +160,54 @@ void OmapTest::after_pool_create(PoolType type,
 {
   if (type == PoolType::FAST_EC) {
     enable_omap_for_pool(pname, cluster);
+  }
+}
+
+void OmapTest::SetUpTestSuite()
+{
+  // Call parent class setup first
+  PoolTypeTestFixture::SetUpTestSuite();
+  
+  // Enable read error injection globally for all OSDs
+  enable_read_error_injection();
+}
+
+void OmapTest::TearDownTestSuite()
+{
+  // Disable read error injection before cleanup
+  disable_read_error_injection();
+  
+  // Call parent class teardown
+  PoolTypeTestFixture::TearDownTestSuite();
+}
+
+void OmapTest::enable_read_error_injection()
+{
+  bufferlist inbl, outbl;
+  std::ostringstream oss;
+  oss << R"({"prefix": "config set",)"
+      << R"("who": "global",)"
+      << R"("name": "bluestore_debug_inject_read_err",)"
+      << R"("value": "true"})";
+  int ret = rados.mon_command(oss.str(), std::move(inbl), &outbl, nullptr);
+  if (ret != 0) {
+    std::cerr << "Warning: Failed to enable bluestore_debug_inject_read_err: "
+              << ret << std::endl;
+  }
+}
+
+void OmapTest::disable_read_error_injection()
+{
+  bufferlist inbl, outbl;
+  std::ostringstream oss;
+  oss << R"({"prefix": "config set",)"
+      << R"("who": "global",)"
+      << R"("name": "bluestore_debug_inject_read_err",)"
+      << R"("value": "false"})";
+  int ret = rados.mon_command(oss.str(), std::move(inbl), &outbl, nullptr);
+  if (ret != 0) {
+    std::cerr << "Warning: Failed to disable bluestore_debug_inject_read_err: "
+              << ret << std::endl;
   }
 }
 
@@ -203,9 +284,18 @@ int OmapTest::request_osd_map(
     std::string oid,
     ceph::messaging::osd::OSDMapReply* reply)
 {
+  return request_osd_map(oid, pool_name, nspace, reply);
+}
+
+int OmapTest::request_osd_map(
+    std::string oid,
+    const std::string& pname,
+    const std::string& ns,
+    ceph::messaging::osd::OSDMapReply* reply)
+{
   bufferlist inbl, outbl;
   auto formatter = std::make_unique<JSONFormatter>(false);
-  ceph::messaging::osd::OSDMapRequest osdMapRequest{pool_name, oid, nspace};
+  ceph::messaging::osd::OSDMapRequest osdMapRequest{pname, oid, ns};
   encode_json("OSDMapRequest", osdMapRequest, formatter.get());
 
   std::ostringstream oss;
@@ -248,12 +338,22 @@ int OmapTest::wait_for_upmap(
     int desired_primary,
     std::chrono::seconds timeout)
 {
+  return wait_for_upmap(oid, pool_name, nspace, desired_primary, timeout);
+}
+
+int OmapTest::wait_for_upmap(
+    std::string oid,
+    const std::string& pname,
+    const std::string& ns,
+    int desired_primary,
+    std::chrono::seconds timeout)
+{
   bool upmap_in_effect = false;
   auto start_time = std::chrono::steady_clock::now();
   while (!upmap_in_effect &&
          (std::chrono::steady_clock::now() - start_time < timeout)) {
     ceph::messaging::osd::OSDMapReply reply;
-    int res = request_osd_map(oid, &reply);
+    int res = request_osd_map(oid, pname, ns, &reply);
     EXPECT_TRUE(res == 0);
     std::vector<int> acting_osds = reply.acting;
     if (!acting_osds.empty() && acting_osds[0] == desired_primary) {
@@ -273,7 +373,39 @@ void OmapTest::print_osd_map(std::string message, std::vector<int> osd_vec)
   std::cout << message << out_vec.str().c_str() << std::endl;
 }
 
+int OmapTest::inject_read_error(
+    const std::string& oid,
+    int target_osd,
+    PoolType pool_type)
+{
+  EXPECT_EQ(pool_type, PoolType::FAST_EC);
+  
+  std::cout << "Injecting EC read error for object on shard 0..." << std::endl;
+  std::ostringstream oss;
+  oss << "{\"prefix\": \"injectecreaderr\", "
+      << "\"pool\": \"" << pool_name << "\", "
+      << "\"objname\": \"" << oid << "\", "
+      << "\"shardid\": 0, "
+      << "\"type\": 0, "
+      << "\"when\": 0, "
+      << "\"duration\": 5}";
+  bufferlist inbl, outbl;
+  int ret = rados.osd_command(target_osd, oss.str(), std::move(inbl), &outbl, nullptr);
+  return ret;
+}
+
 void OmapTest::check_omap_read(
+    std::string oid,
+    std::string first_omap_key,
+    std::string first_omap_value,
+    int expected_size,
+    int expected_err)
+{
+  check_omap_read(ioctx, oid, first_omap_key, first_omap_value, expected_size, expected_err);
+}
+
+void OmapTest::check_omap_read(
+    IoCtx& ctx,
     std::string oid,
     std::string first_omap_key,
     std::string first_omap_value,
@@ -284,7 +416,7 @@ void OmapTest::check_omap_read(
   int err = 0;
   std::map<std::string,bufferlist> vals_read{{"_", {}}};
   read.omap_get_vals2("", LONG_MAX, &vals_read, nullptr, &err);
-  int ret = ioctx.operate(oid, &read, nullptr);
+  int ret = ctx.operate(oid, &read, nullptr);
   EXPECT_EQ(ret, 0);
   EXPECT_EQ(err, expected_err);
   EXPECT_EQ(vals_read.size(), expected_size);
@@ -300,13 +432,21 @@ void OmapTest::create_test_object_with_omap(
     const std::string& oid,
     const std::map<std::string, bufferlist>& omap_map,
     const bufferlist& omap_header) {
+  create_test_object_with_omap(ioctx, oid, omap_map, omap_header);
+}
+
+void OmapTest::create_test_object_with_omap(
+    IoCtx& ctx,
+    const std::string& oid,
+    const std::map<std::string, bufferlist>& omap_map,
+    const bufferlist& omap_header) {
   bufferlist bl_write;
   bl_write.append("ceph");
   ObjectWriteOperation write_op;
   write_op.write(0, bl_write);
   write_op.omap_set_header(omap_header);
   write_op.omap_set(omap_map);
-  int ret = ioctx.operate(oid, &write_op);
+  int ret = ctx.operate(oid, &write_op);
   ASSERT_EQ(ret, 0);
 }
 
@@ -823,6 +963,73 @@ TEST_P(OmapTest, LargeOmapRecovery) {
 
   // 6. Read omap
   check_omap_read("large_oid", "key_000000", huge_val, 1024, 0);
+}
+
+TEST_P(OmapTest, ErrorInjectRecovery) {
+  SKIP_IF_CRIMSON();
+  if (pool_type != PoolType::FAST_EC) {
+    GTEST_SKIP() << "Test only applicable to EC pools";
+  }
+  GTEST_SKIP() << "Test disabled as it does not correctly target the get_remaining_shards code path";
+  turn_balancing_off();
+  
+  bufferlist bl_write, omap_val_bl;
+  const std::string omap_key_1 = "key_a";
+  const std::string omap_key_2 = "key_b";
+  const std::string omap_key_3 = "key_c";
+  const std::string omap_value = "val_12345";
+  encode(omap_value, omap_val_bl);
+  std::map<std::string, bufferlist> omap_map = {
+    {omap_key_1, omap_val_bl},
+    {omap_key_2, omap_val_bl},
+    {omap_key_3, omap_val_bl}
+  };
+  const std::string header = "upmap_header_z";
+  bufferlist header_bl;
+  encode(header, header_bl);
+  bl_write.append("test_data_for_recovery");
+  
+  // 1. Write object with OMAP data
+  ObjectWriteOperation write1;
+  write1.write(0, bl_write);
+  write1.omap_set(omap_map);
+  write1.omap_set_header(header_bl);
+  int ret = ioctx.operate("error_inject_oid", &write1);
+  EXPECT_EQ(ret, 0);
+
+  // 2. Find up osds
+  ceph::messaging::osd::OSDMapReply reply;
+  int res = request_osd_map("error_inject_oid", &reply);
+  EXPECT_TRUE(res == 0);
+  std::vector<int> prev_up_osds = reply.up;
+  std::string pgid = reply.pgid;
+  print_osd_map("Previous up osds: ", prev_up_osds);
+  
+  // 3. Swap first and last osds to form new upmap
+  int prev_primary = prev_up_osds[0];
+  std::vector<int> new_up_osds = prev_up_osds;
+  std::swap(new_up_osds[0], new_up_osds[new_up_osds.size() - 1]);
+  int new_primary = new_up_osds[0];
+  std::cout << "Previous primary osd: " << prev_primary << std::endl;
+  std::cout << "New primary osd: " << new_primary << std::endl;
+  print_osd_map("Desired up osds: ", new_up_osds);
+
+  // 4. Inject read error for the object based on pool type
+  ret = inject_read_error("error_inject_oid", new_primary, pool_type);
+  EXPECT_EQ(ret, 0);
+
+  // 5. Set new up map to trigger recovery
+  int rc = set_osd_upmap(pgid, new_up_osds);
+  EXPECT_TRUE(rc == 0);
+
+  // 6. Wait for new upmap to appear as acting set of osds
+  int res2 = wait_for_upmap("error_inject_oid", new_primary, 120s);
+  EXPECT_TRUE(res2 == 0);
+  
+  // 7. Read and verify omap data after recovery
+  // The recovery should have succeeded despite the injected read errors
+  // by using the need_resend code path and get_remaining_shards
+  check_omap_read("error_inject_oid", omap_key_1, omap_value, 3, 0);
 }
 
 TEST_P(OmapTest, OmapAfterDelete) {

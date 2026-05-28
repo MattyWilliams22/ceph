@@ -821,8 +821,14 @@ void ECBackend::handle_sub_read_reply(
         op.omaps_complete.erase(hoid);
         op.errors[hoid] = -EIO;
         rop.debug_log.emplace_back(ECUtil::INJECT_EIO, op.from);
+      } else {
+        dout(20) << __func__ << " No error inject - no read error found"
+                << op.from.shard << dendl;
       }
     }
+  } else {
+    dout(20) << __func__ << " No error inject - bluestore_debug_inject_read_err is false "
+            << dendl;
   }
   for (auto &&[hoid, offset_buffer_map]: op.buffers_read) {
     ceph_assert(!op.errors.contains(hoid));
