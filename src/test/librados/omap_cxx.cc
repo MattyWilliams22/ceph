@@ -75,27 +75,52 @@ protected:
       const std::string& oid,
       int& new_primary,
       std::chrono::seconds timeout = std::chrono::seconds(30));
-
-  // Helper to verify OMAP header matches expected value
-  void verify_omap_header(
+      
+  static void verify_omap_header(
+      IoCtx& ctx,
       const std::string& oid,
       const std::string& expected_header);
 
-  // Helper to verify OMAP keys match expected set
-  void verify_omap_keys(
+  static void verify_omap_keys(
+      IoCtx& ctx,
       const std::string& oid,
       const std::set<std::string>& expected_keys);
 
-  // Helper to verify OMAP values match expected map
-  void verify_omap_values(
+  static void verify_omap_values(
+      IoCtx& ctx,
       const std::string& oid,
       const std::map<std::string, bufferlist>& expected_vals);
 
-  // Helper to verify complete OMAP state (header + keys + values)
-  void verify_omap_state(
+  static void verify_omap_state(
+      IoCtx& ctx,
       const std::string& oid,
       const std::string& expected_header,
       const std::map<std::string, bufferlist>& expected_omap);
+
+  void verify_omap_header(
+      const std::string& oid,
+      const std::string& expected_header) {
+    verify_omap_header(ioctx, oid, expected_header);
+  }
+
+  void verify_omap_keys(
+      const std::string& oid,
+      const std::set<std::string>& expected_keys) {
+    verify_omap_keys(ioctx, oid, expected_keys);
+  }
+
+  void verify_omap_values(
+      const std::string& oid,
+      const std::map<std::string, bufferlist>& expected_vals) {
+    verify_omap_values(ioctx, oid, expected_vals);
+  }
+
+  void verify_omap_state(
+      const std::string& oid,
+      const std::string& expected_header,
+      const std::map<std::string, bufferlist>& expected_omap) {
+    verify_omap_state(ioctx, oid, expected_header, expected_omap);
+  }
 
   class SnapshotContext {
     IoCtx& ioctx;
@@ -104,14 +129,14 @@ protected:
     librados::Rados& rados;
     std::string pool_name;
     std::string nspace;
-    
+
   public:
     SnapshotContext(IoCtx& ctx, librados::Rados& r,
                     const std::string& pool, const std::string& ns);
-    
+
     uint64_t get_snap_id() const { return snaps[0]; }
     IoCtx& get_snap_ioctx() { return snap_ioctx; }
-    
+
     ~SnapshotContext();
   };
 };
@@ -348,53 +373,57 @@ void OmapTest::setup_and_trigger_recovery(
   ceph::messaging::osd::OSDMapReply reply;
   int res = request_osd_map(oid, &reply);
   EXPECT_EQ(0, res);
-  
+
   std::vector<int> prev_up_osds = reply.up;
   std::string pgid = reply.pgid;
   print_osd_map("Previous up osds: ", prev_up_osds);
-  
+
   // Swap first and last osds to form new upmap
   int prev_primary = prev_up_osds[0];
   std::vector<int> new_up_osds = prev_up_osds;
   std::swap(new_up_osds[0], new_up_osds[new_up_osds.size() - 1]);
   new_primary = new_up_osds[0];
-  
+
   std::cout << "Previous primary osd: " << prev_primary << std::endl;
   std::cout << "New primary osd: " << new_primary << std::endl;
   print_osd_map("Desired up osds: ", new_up_osds);
-  
+
   // Set new upmap
   int rc = set_osd_upmap(pgid, new_up_osds);
   EXPECT_EQ(0, rc);
-  
+
   // Wait for new upmap to appear as acting set of osds
   int res2 = wait_for_upmap(oid, new_primary, timeout);
   EXPECT_EQ(0, res2);
 }
 
 void OmapTest::verify_omap_header(
+    IoCtx& ctx,
     const std::string& oid,
     const std::string& expected_header) {
   bufferlist header_bl;
   int err = 0;
   ObjectReadOperation read;
   read.omap_get_header(&header_bl, &err);
-  ASSERT_EQ(0, ioctx.operate(oid, &read, nullptr));
+  ASSERT_EQ(0, ctx.operate(oid, &read, nullptr));
   ASSERT_EQ(0, err);
-  
+
   std::string header_str;
-  decode(header_str, header_bl);
+  if (header_bl.length() > 0) {
+    decode(header_str, header_bl);
+  }
   ASSERT_EQ(expected_header, header_str);
 }
 
 void OmapTest::verify_omap_keys(
+    IoCtx& ctx,
     const std::string& oid,
     const std::set<std::string>& expected_keys) {
   std::set<std::string> keys;
   int err = 0;
   ObjectReadOperation read;
   read.omap_get_keys2("", LONG_MAX, &keys, nullptr, &err);
-  ASSERT_EQ(0, ioctx.operate(oid, &read, nullptr));
+  ASSERT_EQ(0, ctx.operate(oid, &read, nullptr));
   ASSERT_EQ(0, err);
   ASSERT_EQ(expected_keys.size(), keys.size());
   for (const auto& key : expected_keys) {
@@ -403,13 +432,14 @@ void OmapTest::verify_omap_keys(
 }
 
 void OmapTest::verify_omap_values(
+    IoCtx& ctx,
     const std::string& oid,
     const std::map<std::string, bufferlist>& expected_vals) {
   std::map<std::string, bufferlist> vals;
   int err = 0;
   ObjectReadOperation read;
   read.omap_get_vals2("", LONG_MAX, &vals, nullptr, &err);
-  ASSERT_EQ(0, ioctx.operate(oid, &read, nullptr));
+  ASSERT_EQ(0, ctx.operate(oid, &read, nullptr));
   ASSERT_EQ(0, err);
   ASSERT_EQ(expected_vals.size(), vals.size());
   for (const auto& kv : expected_vals) {
@@ -419,11 +449,12 @@ void OmapTest::verify_omap_values(
 }
 
 void OmapTest::verify_omap_state(
+    IoCtx& ctx,
     const std::string& oid,
     const std::string& expected_header,
     const std::map<std::string, bufferlist>& expected_omap) {
-  verify_omap_header(oid, expected_header);
-  verify_omap_values(oid, expected_omap);
+  verify_omap_header(ctx, oid, expected_header);
+  verify_omap_values(ctx, oid, expected_omap);
 }
 
 OmapTest::SnapshotContext::SnapshotContext(
@@ -435,7 +466,7 @@ OmapTest::SnapshotContext::SnapshotContext(
   ::std::reverse(snaps.begin(), snaps.end());
   EXPECT_EQ(0, ioctx.selfmanaged_snap_set_write_ctx(snaps[0], snaps));
   ::std::reverse(snaps.begin(), snaps.end());
-  
+
   EXPECT_EQ(0, rados.ioctx_create(pool_name.c_str(), snap_ioctx));
   snap_ioctx.set_namespace(nspace);
   snap_ioctx.snap_set_read(snaps[0]);
@@ -1602,7 +1633,7 @@ TEST_P(OmapTest, OmapCopyFromOverwritesTarget) {
   // Verify destination now has SOURCE OMAP, not destination OMAP
   verify_omap_header(dst_oid, src_header);
   verify_omap_values(dst_oid, src_omap_map);
-  
+
   // Verify destination keys are NOT present
   std::set<std::string> keys_read;
   int err = 0;
@@ -1611,14 +1642,14 @@ TEST_P(OmapTest, OmapCopyFromOverwritesTarget) {
   int ret = ioctx.operate(dst_oid, &read_keys, nullptr);
   ASSERT_EQ(0, ret);
   ASSERT_EQ(0, err);
-  
+
   ASSERT_EQ(0u, keys_read.count("dst_key1"))
     << "Old destination key 'dst_key1' should NOT be present after copy_from";
   ASSERT_EQ(0u, keys_read.count("dst_key2"))
     << "Old destination key 'dst_key2' should NOT be present after copy_from";
   ASSERT_EQ(0u, keys_read.count("dst_key3"))
     << "Old destination key 'dst_key3' should NOT be present after copy_from";
-  
+
   // For EC pools, verify journal-only key is NOT present
   if (pool_type == PoolType::FAST_EC) {
     ASSERT_EQ(0u, keys_read.count("dst_key_journal_only"))
@@ -1649,13 +1680,13 @@ TEST_P(OmapTest, GenerationalObjectRecovery) {
   write1.omap_set_header(header1);
   int ret = ioctx.operate(oid, &write1);
   EXPECT_EQ(ret, 0);
-  
+
   // 2. Delete object (creates a generational tombstone)
   ObjectWriteOperation del_op;
   del_op.remove();
   ret = ioctx.operate(oid, &del_op);
   EXPECT_EQ(ret, 0);
-  
+
   // 3. Recreate object with DIFFERENT omap (new HEAD, old gen still exists)
   std::map<std::string, bufferlist> omap_v2;
   bufferlist val2;
@@ -1673,7 +1704,7 @@ TEST_P(OmapTest, GenerationalObjectRecovery) {
   write2.omap_set_header(header2);
   ret = ioctx.operate(oid, &write2);
   EXPECT_EQ(ret, 0);
-  
+
   // 4. Get current OSD mapping
   ceph::messaging::osd::OSDMapReply reply;
   int res = request_osd_map(oid, &reply);
@@ -1694,11 +1725,11 @@ TEST_P(OmapTest, GenerationalObjectRecovery) {
   
   int rc = set_osd_upmap(pgid, new_up_osds);
   EXPECT_TRUE(rc == 0);
-  
+
   // 6. Wait for recovery to complete
   int res2 = wait_for_upmap(oid, new_primary, 60s);
   EXPECT_TRUE(res2 == 0);
-  
+
   // 7. Read omap - verify we got the NEW head value, not old generation
   // If the bug exists, recovery might have retrieved data from wrong generation
   std::map<std::string, bufferlist> result_omap;
@@ -1715,7 +1746,7 @@ TEST_P(OmapTest, GenerationalObjectRecovery) {
   
   std::string result_val;
   decode(result_val, result_omap["test_key"]);
-  
+
   // This assertion will FAIL if the bug exists and wrong generation was recovered
   EXPECT_EQ(result_val, new_head_value)
     << "ERROR: Recovered wrong generation! Got '" << result_val
@@ -1732,11 +1763,62 @@ TEST_P(OmapTest, GenerationalObjectRecovery) {
   
   std::string result_header_str;
   decode(result_header_str, result_header);
-  
+
   // This assertion will FAIL if the bug exists and wrong generation header was recovered
   EXPECT_EQ(result_header_str, new_head_header)
     << "ERROR: Recovered wrong generation header! Got '" << result_header_str
     << "' but expected '" << new_head_header << "'";
+}
+
+TEST_P(OmapTest, WhiteoutOmapHeaderLeak) {
+  SKIP_IF_CRIMSON();
+
+  const std::string oid = "whiteout_omap_leak_test";
+  const std::string original_header = "test_header";
+
+  // Create object with omap header and keys
+  std::map<std::string, bufferlist> omap_data;
+  bufferlist val;
+  encode("value", val);
+  omap_data["key1"] = val;
+  omap_data["key2"] = val;
+
+  bufferlist header_bl;
+  encode(original_header, header_bl);
+  create_test_object_with_omap(oid, omap_data, header_bl);
+
+  // Verify initial state
+  verify_omap_header(oid, original_header);
+  verify_omap_keys(oid, {"key1", "key2"});
+
+  // Create snapshot
+  std::vector<uint64_t> my_snaps;
+  create_snapshot_and_set_write_ctx(my_snaps);
+
+  // Delete head (creates whiteout)
+  ObjectWriteOperation del_op;
+  del_op.remove();
+  ASSERT_EQ(0, ioctx.operate(oid, &del_op));
+
+  // Recreate head object (clears whiteout flag)
+  trigger_clone(oid);
+
+  // Verify recreated head has NO omap data (bug test)
+  verify_omap_header(oid, "");
+  verify_omap_keys(oid, {});
+
+  // Verify snapshot preserves original omap data
+  IoCtx snap_ioctx;
+  ASSERT_EQ(0, rados.ioctx_create(pool_name.c_str(), snap_ioctx));
+  snap_ioctx.set_namespace(nspace);
+  snap_ioctx.snap_set_read(my_snaps[0]);
+
+  verify_omap_header(snap_ioctx, oid, original_header);
+  verify_omap_keys(snap_ioctx, oid, {"key1", "key2"});
+
+  // Cleanup
+  ASSERT_EQ(0, ioctx.selfmanaged_snap_remove(my_snaps.back()));
+  snap_ioctx.close();
 }
 
 // Define static members
