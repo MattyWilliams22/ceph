@@ -187,7 +187,8 @@ def task(ctx, config):
         'kill', 
         'ceph_test_rados']
     if config.get('ec_pool', False):
-        args.extend(['--no-omap'])
+        # Don't automatically set --no-omap for EC pools anymore
+        # Let the test query the pool's supports_omap flag instead
         if not config.get('erasure_code_use_overwrites', False):
             args.extend(['--ec-pool'])
     if config.get('write_fadvise_dontneed', False):
