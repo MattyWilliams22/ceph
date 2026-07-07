@@ -6066,6 +6066,67 @@ inline static const bool should_whiteout(
 
 #define OI_ATTR "_"
 #define SS_ATTR "snapset"
+// Block granularity for force-allocated extent tracking (4 KiB, aligned with
+// EC operations, LUKS2, and fscrypt block sizes).
+static constexpr uint64_t FAE_BLOCK_SIZE = 4096;
+
+static constexpr uint32_t FAE_BITMAP_THRESHOLD = 128;
+
+// Tracks which 4 KiB blocks of an erasure-coded object must be treated as
+// force-allocated (non-sparse) even though they contain only zeroes.
+//
+// The struct is embedded in object_info_t and serialised with it; there is no
+// separate xattr.  Internally the set is always an interval_set<uint64_t>,
+// but on encode a hybrid representation is chosen automatically:
+//   variant 0 (interval list) – when num_intervals() <= FAE_BITMAP_THRESHOLD
+//   variant 1 (bitmap)        – when num_intervals() >  FAE_BITMAP_THRESHOLD
+//
+// The bitmap variant derives its block count from the highest interval end in
+// the set, so no external object_size parameter is needed.
+//
+// All byte offsets/lengths accepted by the mutating methods are rounded
+// outward to FAE_BLOCK_SIZE boundaries internally.
+struct force_allocated_extents_t {
+  interval_set<uint64_t> intervals;
+
+  bool empty() const { return intervals.empty(); }
+  void clear()       { intervals.clear(); }
+
+  bool operator==(const force_allocated_extents_t& o) const {
+    return intervals == o.intervals;
+  }
+  bool operator!=(const force_allocated_extents_t& o) const {
+    return !(*this == o);
+  }
+
+  // Union all intervals from o into this set.
+  void union_of(const force_allocated_extents_t& o) {
+    intervals.union_of(o.intervals);
+  }
+
+  // Mark [offset, offset+length) as force-allocated.
+  // Rounded outward to FAE_BLOCK_SIZE.
+  void add(uint64_t offset, uint64_t length);
+
+  // Unmark [offset, offset+length).
+  // Rounded outward to FAE_BLOCK_SIZE.
+  void remove(uint64_t offset, uint64_t length);
+
+  // Drop all extents at byte offset >= new_size.
+  void truncate(uint64_t new_size);
+
+  // Hybrid encode: variant 0 (interval list) when
+  // num_intervals() <= FAE_BITMAP_THRESHOLD, variant 1 (bitmap) otherwise.
+  // Compatible with WRITE_CLASS_ENCODER — no extra arguments required.
+  void encode(ceph::buffer::list& bl) const;
+  void decode(ceph::buffer::list::const_iterator& p);
+
+  void dump(ceph::Formatter *f) const;
+  static std::list<force_allocated_extents_t> generate_test_instances();
+};
+WRITE_CLASS_ENCODER(force_allocated_extents_t)
+
+std::ostream& operator<<(std::ostream&, const force_allocated_extents_t&);
 
 struct watch_info_t {
   uint64_t cookie;
@@ -6405,6 +6466,8 @@ struct object_info_t {
   struct object_manifest_t manifest;
 
   std::map<shard_id_t,eversion_t> shard_versions;
+
+  force_allocated_extents_t force_allocated_extents;
 
   void copy_user_bits(const object_info_t& other);
 

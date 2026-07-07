@@ -34,6 +34,7 @@
 
 #include "include/ceph_features.h"
 #include "include/encoding.h"
+#include "include/intarith.h"
 #include "include/stringify.h"
 
 #include "crush/CrushWrapper.h"
@@ -6603,7 +6604,7 @@ void object_info_t::encode(ceph::buffer::list& bl, uint64_t features) const
   for (auto i = watchers.cbegin(); i != watchers.cend(); ++i) {
     old_watchers.insert(make_pair(i->first.second, i->second));
   }
-  ENCODE_START(18, 8, bl);
+  ENCODE_START(19, 8, bl);
   encode(soid, bl);
   encode(myoloc, bl);	//Retained for compatibility
   encode((__u32)0, bl); // was category, no longer used
@@ -6638,13 +6639,14 @@ void object_info_t::encode(ceph::buffer::list& bl, uint64_t features) const
     encode(manifest, bl);
   }
   encode(shard_versions, bl);
+  encode(force_allocated_extents, bl);
   ENCODE_FINISH(bl);
 }
 
 void object_info_t::decode(ceph::buffer::list::const_iterator& bl)
 {
   object_locator_t myoloc;
-  DECODE_START_LEGACY_COMPAT_LEN(18, 8, 8, bl);
+  DECODE_START_LEGACY_COMPAT_LEN(19, 8, 8, bl);
   map<entity_name_t, watch_info_t> old_watchers;
   decode(soid, bl);
   decode(myoloc, bl);
@@ -6733,6 +6735,9 @@ void object_info_t::decode(ceph::buffer::list::const_iterator& bl)
   if (struct_v >= 18) {
     decode(shard_versions, bl);
   }
+  if (struct_v >= 19) {
+    decode(force_allocated_extents, bl);
+  }
   DECODE_FINISH(bl);
 }
 
@@ -6780,6 +6785,7 @@ void object_info_t::dump(Formatter *f) const
     f->close_section();
   }
   f->close_section();
+  f->dump_object("force_allocated_extents", force_allocated_extents);
 }
 
 list<object_info_t> object_info_t::generate_test_instances()
@@ -6811,6 +6817,8 @@ ostream& operator<<(ostream& out, const object_info_t& oi)
     out << " " << oi.manifest;
   if (!oi.shard_versions.empty())
     out << " shard_versions=" << oi.shard_versions;
+  if (!oi.force_allocated_extents.empty())
+    out << " fae=" << oi.force_allocated_extents;
   out << ")";
   return out;
 }
@@ -7748,4 +7756,171 @@ std::optional<op_queue_type_t> get_op_queue_type_by_name(
   } else {
     return std::nullopt;
   }
+}
+
+// ---------------------------------------------------------------------------
+// force_allocated_extents_t
+// ---------------------------------------------------------------------------
+
+void force_allocated_extents_t::encode(ceph::buffer::list& bl) const
+{
+  ENCODE_START(1, 1, bl);
+  if (intervals.num_intervals() <= FAE_BITMAP_THRESHOLD) {
+    // Variant 0: interval set
+    const uint8_t variant = 0;
+    ::encode(variant, bl);
+    const uint32_t count = intervals.num_intervals();
+    ::encode(count, bl);
+    for (auto [start, len] : intervals) {
+      ::encode(start, bl);
+      ::encode(len, bl);
+    }
+  } else {
+    // Variant 1: bitmap – one bit per FAE_BLOCK_SIZE block
+    const uint8_t variant = 1;
+    ::encode(variant, bl);
+    const uint64_t block_count =
+      div_round_up(intervals.range_end(), FAE_BLOCK_SIZE);
+    const uint32_t word_count =
+      static_cast<uint32_t>(div_round_up(block_count, uint64_t{64}));
+    ::encode(block_count, bl);
+    ::encode(word_count, bl);
+    std::vector<uint64_t> words(word_count, 0);
+    for (auto [start, len] : intervals) {
+      uint64_t first_block = start / FAE_BLOCK_SIZE;
+      uint64_t last_block  = div_round_up(start + len, FAE_BLOCK_SIZE);
+      for (uint64_t b = first_block; b < last_block && b < block_count; ++b) {
+        words[b / 64] |= (uint64_t{1} << (b % 64));
+      }
+    }
+    for (uint32_t i = 0; i < word_count; ++i) {
+      ::encode(words[i], bl);
+    }
+  }
+  ENCODE_FINISH(bl);
+}
+
+void force_allocated_extents_t::decode(ceph::buffer::list::const_iterator& p)
+{
+  intervals.clear();
+  if (p.end()) {
+    return;
+  }
+  DECODE_START(1, p);
+  uint8_t variant = 0;
+  ::decode(variant, p);
+  if (variant == 0) {
+    // Variant 0: interval list
+    uint32_t count = 0;
+    ::decode(count, p);
+    for (uint32_t i = 0; i < count; ++i) {
+      uint64_t start = 0, len = 0;
+      ::decode(start, p);
+      ::decode(len, p);
+      intervals.union_insert(start, len);
+    }
+  } else {
+    // Variant 1: bitmap
+    uint64_t block_count = 0;
+    uint32_t word_count  = 0;
+    ::decode(block_count, p);
+    ::decode(word_count, p);
+    uint64_t run_start = 0;
+    uint64_t run_len   = 0;
+    for (uint32_t w = 0; w < word_count; ++w) {
+      uint64_t word = 0;
+      ::decode(word, p);
+      for (int bit = 0; bit < 64; ++bit) {
+        uint64_t block = uint64_t{w} * 64 + bit;
+        if (block >= block_count) {
+          break;
+        }
+        if (word & (uint64_t{1} << bit)) {
+          if (run_len == 0) {
+            run_start = block * FAE_BLOCK_SIZE;
+          }
+          run_len += FAE_BLOCK_SIZE;
+        } else {
+          if (run_len > 0) {
+            intervals.union_insert(run_start, run_len);
+            run_len = 0;
+          }
+        }
+      }
+    }
+    if (run_len > 0) {
+      intervals.union_insert(run_start, run_len);
+    }
+  }
+  DECODE_FINISH(p);
+}
+
+void force_allocated_extents_t::add(uint64_t offset, uint64_t length)
+{
+  if (length == 0) {
+    return;
+  }
+  uint64_t aligned_start = round_down_to(offset, FAE_BLOCK_SIZE);
+  uint64_t aligned_end   = round_up_to(offset + length, FAE_BLOCK_SIZE);
+  intervals.union_insert(aligned_start, aligned_end - aligned_start);
+}
+
+void force_allocated_extents_t::remove(uint64_t offset, uint64_t length)
+{
+  if (length == 0 || intervals.empty()) {
+    return;
+  }
+  uint64_t aligned_start = round_down_to(offset, FAE_BLOCK_SIZE);
+  uint64_t aligned_end   = round_up_to(offset + length, FAE_BLOCK_SIZE);
+  interval_set<uint64_t> removal;
+  removal.insert(aligned_start, aligned_end - aligned_start);
+  interval_set<uint64_t> to_erase;
+  to_erase.intersection_of(intervals, removal);
+  intervals.subtract(to_erase);
+}
+
+void force_allocated_extents_t::truncate(uint64_t new_size)
+{
+  if (intervals.empty()) {
+    return;
+  }
+  uint64_t aligned_size = round_up_to(new_size, FAE_BLOCK_SIZE);
+  if (intervals.range_end() <= aligned_size) {
+    return;
+  }
+  interval_set<uint64_t> tail;
+  tail.insert(aligned_size, intervals.range_end() - aligned_size);
+  interval_set<uint64_t> to_erase;
+  to_erase.intersection_of(intervals, tail);
+  intervals.subtract(to_erase);
+}
+
+void force_allocated_extents_t::dump(Formatter *f) const
+{
+  f->open_array_section("intervals");
+  for (auto [start, len] : intervals) {
+    f->open_object_section("extent");
+    f->dump_unsigned("offset", start);
+    f->dump_unsigned("length", len);
+    f->close_section();
+  }
+  f->close_section();
+}
+
+std::list<force_allocated_extents_t>
+force_allocated_extents_t::generate_test_instances()
+{
+  std::list<force_allocated_extents_t> o;
+  o.push_back(force_allocated_extents_t());
+  force_allocated_extents_t fae;
+  fae.add(0, FAE_BLOCK_SIZE);
+  fae.add(FAE_BLOCK_SIZE * 4, FAE_BLOCK_SIZE * 2);
+  o.push_back(fae);
+  return o;
+}
+
+std::ostream& operator<<(std::ostream& out,
+                         const force_allocated_extents_t& fae)
+{
+  return out << fae.intervals;
 }
