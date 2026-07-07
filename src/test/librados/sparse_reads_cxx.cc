@@ -7,7 +7,9 @@
 #include "gtest/gtest.h"
 
 #include "include/buffer.h"
+#include "include/interval_set.h"
 #include "include/rados/librados.hpp"
+#include "osd/osd_types.h"
 #include "test/librados/test_cxx.h"
 #include "test/librados/test_pool_types.h"
 #include "crimson_utils.h"
@@ -102,11 +104,11 @@ TEST_P(SparseReadTest, BasicSparseRead) {
 // Test sparse_read with holes (unallocated regions)
 TEST_P(SparseReadTest, SparseReadWithHoles) {
   std::string oid = "sparse_read_holes";
-  
+
   // Write data at offset 0 and 8192, leaving a hole at 4096
   bufferlist write_bl1 = create_pattern_buffer(4096, 'A');
   bufferlist write_bl2 = create_pattern_buffer(4096, 'B');
-  
+
   ASSERT_EQ(0, ioctx.write(oid, write_bl1, write_bl1.length(), 0));
   ASSERT_EQ(0, ioctx.write(oid, write_bl2, write_bl2.length(), 8192));
 
@@ -114,7 +116,7 @@ TEST_P(SparseReadTest, SparseReadWithHoles) {
   std::map<uint64_t, uint64_t> extents;
   bufferlist read_bl;
   int ret = ioctx.sparse_read(oid, extents, read_bl, 12288, 0);
-  
+
   ASSERT_EQ(ret, 2);
   ASSERT_EQ(read_bl.length(), 8192u);
   ASSERT_EQ(extents.size(), 2u);
@@ -272,7 +274,7 @@ TEST_P(SparseReadTest, MapextOperation) {
 // Test sparse read after partial overwrite
 TEST_P(SparseReadTest, PartialOverwrite) {
   std::string oid = "partial_overwrite";
-  
+
   // Initial write
   bufferlist write_bl1 = create_pattern_buffer(8192, 'H');
   ASSERT_EQ(0, ioctx.write(oid, write_bl1, write_bl1.length(), 0));
@@ -294,10 +296,10 @@ TEST_P(SparseReadTest, PartialOverwrite) {
 // Test sparse read with large object
 TEST_P(SparseReadTest, LargeObjectSparseRead) {
   std::string oid = "large_sparse";
-  
+
   // Write data at various offsets to create sparse pattern
   bufferlist write_bl = create_pattern_buffer(4096, 'J');
-  
+
   ASSERT_EQ(0, ioctx.write(oid, write_bl, write_bl.length(), 0));
   ASSERT_EQ(0, ioctx.write(oid, write_bl, write_bl.length(), 16384));
   ASSERT_EQ(0, ioctx.write(oid, write_bl, write_bl.length(), 32768));
@@ -306,7 +308,7 @@ TEST_P(SparseReadTest, LargeObjectSparseRead) {
   std::map<uint64_t, uint64_t> extents;
   bufferlist read_bl;
   int ret = ioctx.sparse_read(oid, extents, read_bl, 40960, 0);
-  
+
   ASSERT_EQ(ret, 3);
   ASSERT_EQ(read_bl.length(), 12288u);
   ASSERT_EQ(extents.size(), 3u);
@@ -623,18 +625,18 @@ TEST_P(SparseReadTest, ZeroOperationDeallocates) {
 // Test sparse read with offset and partial length
 TEST_P(SparseReadTest, SparseReadPartialRange) {
   std::string oid = "sparse_partial";
-  
+
   // Write data at multiple offsets
   bufferlist write_bl = create_pattern_buffer(4096, 'Q');
   ASSERT_EQ(0, ioctx.write(oid, write_bl, write_bl.length(), 0));
   ASSERT_EQ(0, ioctx.write(oid, write_bl, write_bl.length(), 8192));
   ASSERT_EQ(0, ioctx.write(oid, write_bl, write_bl.length(), 16384));
-  
+
   // Sparse read middle section only
   std::map<uint64_t, uint64_t> extents;
   bufferlist read_bl;
   int ret = ioctx.sparse_read(oid, extents, read_bl, 8192, 4096);
-  
+
   ASSERT_GE(ret, 0);
   // Should only get data from the requested range
   for (const auto& [offset, len] : extents) {
