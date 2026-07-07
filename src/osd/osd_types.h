@@ -1330,6 +1330,12 @@ struct pg_pool_t {
     FLAG_EC_OPTIMIZATIONS = 1<<19, // enable optimizations, once enabled, cannot be disabled
     FLAG_CLIENT_SPLIT_READS = 1<<20, // Optimized EC is permitted to do direct reads.
     FLAG_OMAP = 1<<21, // Pool is permitted to perform OMAP operations
+    // When set, the OSD tracks which 4K-aligned extents in each EC object
+    // contain only zeroes (force-allocated extents).  This enables sparse
+    // reads (MAPEXT / SPARSE_READ) and avoids unnecessary I/O for
+    // all-zero stripe units.  Only meaningful on EC pools with
+    // FLAG_EC_OPTIMIZATIONS; can be toggled without rebuilding existing data.
+    FLAG_TRACK_ZERO_BLOCKS = 1<<22,
   };
 
   static const char *get_flag_name(uint64_t f) {
@@ -1356,6 +1362,7 @@ struct pg_pool_t {
     case FLAG_EC_OPTIMIZATIONS: return "ec_optimizations";
     case FLAG_CLIENT_SPLIT_READS: return "split_reads";
     case FLAG_OMAP: return "supports_omap";
+    case FLAG_TRACK_ZERO_BLOCKS: return "track_zero_blocks";
     default: return "???";
     }
   }
@@ -1418,6 +1425,8 @@ struct pg_pool_t {
       return FLAG_CLIENT_SPLIT_READS;
     if (name == "supports_omap")
       return FLAG_OMAP;
+    if (name == "track_zero_blocks")
+      return FLAG_TRACK_ZERO_BLOCKS;
     return 0;
   }
 
@@ -1846,6 +1855,18 @@ public:
 
   bool is_crimson() const {
     return has_flag(FLAG_CRIMSON);
+  }
+
+  /// Returns true when the pool is configured to track force-allocated
+  /// (all-zero) extents per object, enabling sparse read support.
+  bool tracks_zero_blocks() const {
+    return has_flag(FLAG_TRACK_ZERO_BLOCKS);
+  }
+  void enable_track_zero_blocks() {
+    set_flag(FLAG_TRACK_ZERO_BLOCKS);
+  }
+  void disable_track_zero_blocks() {
+    unset_flag(FLAG_TRACK_ZERO_BLOCKS);
   }
 
   bool can_shift_osds() const {
