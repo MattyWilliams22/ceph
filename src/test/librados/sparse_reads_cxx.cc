@@ -33,6 +33,13 @@ protected:
   void SetUp() override {
     SKIP_IF_CRIMSON();
     PoolTypeTestFixture::SetUp();
+    if (GetParam() == PoolType::FAST_EC) {
+      ASSERT_EQ("", set_pool_flags_pp(
+        pool_name,
+        rados,
+        pg_pool_t::FLAG_TRACK_ZERO_BLOCKS,
+        true));
+    }
   }
 
   void TearDown() override {
