@@ -2691,6 +2691,252 @@ TEST(chunk_info_test, calc_refs_inc_match) {
     mk_delta({}));
 }
 
+// ---------------------------------------------------------------------------
+// force_allocated_extents_t tests
+// ---------------------------------------------------------------------------
+
+TEST(ForceAllocatedExtents, EncodeDecodeEmpty)
+{
+  force_allocated_extents_t fae;
+  ceph::buffer::list bl;
+  fae.encode(bl);
+  auto p = bl.cbegin();
+  force_allocated_extents_t out;
+  out.decode(p);
+  EXPECT_TRUE(out.empty());
+}
+
+TEST(ForceAllocatedExtents, DecodeEmptyBufferlist)
+{
+  ceph::buffer::list bl; // completely empty – no ENCODE_START
+  auto p = bl.cbegin();
+  force_allocated_extents_t out;
+  out.decode(p);
+  EXPECT_TRUE(out.empty());
+}
+
+TEST(ForceAllocatedExtents, EncodeDecodeVariant0SmallSet)
+{
+  // Fewer intervals than threshold → variant 0 (interval list)
+  force_allocated_extents_t fae;
+  fae.intervals.insert(0, 4096);
+  fae.intervals.insert(8192, 4096);
+  ceph::buffer::list bl;
+  fae.encode(bl);
+  // Verify variant byte is 0 (after ENCODE_START 6-byte header: v, compat, len32)
+  auto raw = bl.cbegin();
+  uint8_t _v1, _v2;
+  uint32_t _len;
+  decode(_v1, raw);  // struct_v
+  decode(_v2, raw);  // compat_v
+  decode(_len, raw); // length
+  uint8_t variant;
+  decode(variant, raw);
+  EXPECT_EQ(0u, variant);
+
+  auto p = bl.cbegin();
+  force_allocated_extents_t out;
+  out.decode(p);
+  EXPECT_EQ(fae.intervals, out.intervals);
+}
+
+TEST(ForceAllocatedExtents, EncodeDecodeVariant1BitmapAboveThreshold)
+{
+  // FAE_BITMAP_THRESHOLD + 1 disjoint 4K intervals → variant 1 (bitmap)
+  force_allocated_extents_t fae;
+  uint32_t n = FAE_BITMAP_THRESHOLD + 1;
+  for (uint32_t i = 0; i < n; ++i) {
+    fae.intervals.insert(uint64_t{i} * 2 * FAE_BLOCK_SIZE, FAE_BLOCK_SIZE);
+  }
+  ASSERT_EQ(n, fae.intervals.num_intervals());
+
+  ceph::buffer::list bl;
+  fae.encode(bl);
+
+  // Check the variant byte is 1 (after ENCODE_START 6-byte header)
+  auto raw = bl.cbegin();
+  uint8_t _v1, _v2;
+  uint32_t _len;
+  decode(_v1, raw);
+  decode(_v2, raw);
+  decode(_len, raw);
+  uint8_t variant;
+  decode(variant, raw);
+  EXPECT_EQ(1u, variant);
+
+  // Full round-trip
+  auto p = bl.cbegin();
+  force_allocated_extents_t out;
+  out.decode(p);
+  EXPECT_EQ(fae.intervals, out.intervals);
+}
+
+TEST(ForceAllocatedExtents, EncodeDecodeVariant1ContiguousBitsMerged)
+{
+  // Contiguous set bits in bitmap should decode to a single merged interval.
+  // Build a set with >FAE_BITMAP_THRESHOLD disjoint entries so the bitmap
+  // path is exercised, plus 3 adjacent blocks at offset 0 to verify merging.
+  force_allocated_extents_t fae;
+  fae.intervals.insert(0, 3 * FAE_BLOCK_SIZE);
+  uint32_t n = FAE_BITMAP_THRESHOLD; // exactly at threshold still uses list
+  uint64_t base = 1000 * FAE_BLOCK_SIZE;
+  for (uint32_t i = 0; i < n; ++i) {
+    fae.intervals.insert(base + uint64_t{i} * 2 * FAE_BLOCK_SIZE, FAE_BLOCK_SIZE);
+  }
+
+  ceph::buffer::list bl;
+  fae.encode(bl);
+  auto p = bl.cbegin();
+  force_allocated_extents_t out;
+  out.decode(p);
+  EXPECT_EQ(fae.intervals, out.intervals);
+  // The first 3 contiguous blocks must decode back as a single interval
+  auto it = out.intervals.begin();
+  auto [first_start, first_len] = *it;
+  EXPECT_EQ(0u, first_start);
+  EXPECT_EQ(3 * FAE_BLOCK_SIZE, first_len);
+}
+
+// --- add ---
+
+TEST(ForceAllocatedExtents, AddAligned)
+{
+  force_allocated_extents_t fae;
+  fae.add(0, FAE_BLOCK_SIZE);
+  EXPECT_EQ(1u, fae.intervals.num_intervals());
+  EXPECT_TRUE(fae.intervals.contains(0));
+  EXPECT_TRUE(fae.intervals.contains(FAE_BLOCK_SIZE - 1));
+}
+
+TEST(ForceAllocatedExtents, AddUnalignedRoundsOut)
+{
+  force_allocated_extents_t fae;
+  // Unaligned: should round down to 0 and up to 4K
+  fae.add(100, 200);
+  EXPECT_EQ(1u, fae.intervals.num_intervals());
+  auto [start, len] = *fae.intervals.begin();
+  EXPECT_EQ(0u, start);
+  EXPECT_EQ(FAE_BLOCK_SIZE, len);
+}
+
+TEST(ForceAllocatedExtents, AddAdjacentMerges)
+{
+  force_allocated_extents_t fae;
+  fae.add(0, FAE_BLOCK_SIZE);
+  fae.add(FAE_BLOCK_SIZE, FAE_BLOCK_SIZE);
+  EXPECT_EQ(1u, fae.intervals.num_intervals());
+  EXPECT_EQ(2 * FAE_BLOCK_SIZE, fae.intervals.size());
+}
+
+TEST(ForceAllocatedExtents, AddNonAdjacentKeepsSeparate)
+{
+  force_allocated_extents_t fae;
+  fae.add(0, FAE_BLOCK_SIZE);
+  fae.add(2 * FAE_BLOCK_SIZE, FAE_BLOCK_SIZE);
+  EXPECT_EQ(2u, fae.intervals.num_intervals());
+}
+
+TEST(ForceAllocatedExtents, AddZeroLengthNoOp)
+{
+  force_allocated_extents_t fae;
+  fae.add(0, 0);
+  EXPECT_TRUE(fae.empty());
+}
+
+// --- remove ---
+
+TEST(ForceAllocatedExtents, RemoveSplitsInterval)
+{
+  force_allocated_extents_t fae;
+  fae.intervals.insert(0, 3 * FAE_BLOCK_SIZE);
+  // Remove the middle block
+  fae.remove(FAE_BLOCK_SIZE, FAE_BLOCK_SIZE);
+  EXPECT_EQ(2u, fae.intervals.num_intervals());
+  EXPECT_TRUE(fae.intervals.contains(0));
+  EXPECT_FALSE(fae.intervals.contains(FAE_BLOCK_SIZE));
+  EXPECT_TRUE(fae.intervals.contains(2 * FAE_BLOCK_SIZE));
+}
+
+TEST(ForceAllocatedExtents, RemoveSpansMultipleIntervals)
+{
+  force_allocated_extents_t fae;
+  fae.intervals.insert(0, FAE_BLOCK_SIZE);
+  fae.intervals.insert(2 * FAE_BLOCK_SIZE, FAE_BLOCK_SIZE);
+  fae.intervals.insert(4 * FAE_BLOCK_SIZE, FAE_BLOCK_SIZE);
+  fae.remove(0, 5 * FAE_BLOCK_SIZE);
+  EXPECT_TRUE(fae.empty());
+}
+
+TEST(ForceAllocatedExtents, RemoveNonExistentNoOp)
+{
+  force_allocated_extents_t fae;
+  fae.intervals.insert(0, FAE_BLOCK_SIZE);
+  fae.remove(2 * FAE_BLOCK_SIZE, FAE_BLOCK_SIZE);
+  EXPECT_EQ(1u, fae.intervals.num_intervals());
+}
+
+TEST(ForceAllocatedExtents, RemoveZeroLengthNoOp)
+{
+  force_allocated_extents_t fae;
+  fae.intervals.insert(0, FAE_BLOCK_SIZE);
+  fae.remove(0, 0);
+  EXPECT_EQ(1u, fae.intervals.num_intervals());
+}
+
+// --- truncate ---
+
+TEST(ForceAllocatedExtents, TruncateRemovesTail)
+{
+  force_allocated_extents_t fae;
+  fae.intervals.insert(0, FAE_BLOCK_SIZE);
+  fae.intervals.insert(4 * FAE_BLOCK_SIZE, FAE_BLOCK_SIZE);
+  fae.truncate(2 * FAE_BLOCK_SIZE);
+  EXPECT_EQ(1u, fae.intervals.num_intervals());
+  EXPECT_TRUE(fae.intervals.contains(0));
+  EXPECT_FALSE(fae.intervals.contains(4 * FAE_BLOCK_SIZE));
+}
+
+TEST(ForceAllocatedExtents, TruncatePreservesBeforeNewSize)
+{
+  force_allocated_extents_t fae;
+  fae.intervals.insert(0, FAE_BLOCK_SIZE);
+  fae.truncate(FAE_BLOCK_SIZE);
+  EXPECT_EQ(1u, fae.intervals.num_intervals());
+}
+
+TEST(ForceAllocatedExtents, TruncateLargerThanExtentsIsNoOp)
+{
+  force_allocated_extents_t fae;
+  fae.intervals.insert(0, FAE_BLOCK_SIZE);
+  fae.truncate(1024 * FAE_BLOCK_SIZE);
+  EXPECT_EQ(1u, fae.intervals.num_intervals());
+}
+
+TEST(ForceAllocatedExtents, TruncateEmptySetNoOp)
+{
+  force_allocated_extents_t fae;
+  fae.truncate(0);
+  EXPECT_TRUE(fae.empty());
+}
+
+TEST(ForceAllocatedExtents, TruncateUnalignedSizeRoundsUp)
+{
+  // Truncating to an unaligned size should round up to FAE_BLOCK_SIZE,
+  // so a block exactly at the rounded boundary is preserved.
+  force_allocated_extents_t fae;
+  fae.intervals.insert(0, FAE_BLOCK_SIZE);
+  fae.intervals.insert(FAE_BLOCK_SIZE, FAE_BLOCK_SIZE);
+  // Truncate to half-way through the first block: rounds up to FAE_BLOCK_SIZE
+  // so both blocks should be preserved (aligned_size == FAE_BLOCK_SIZE,
+  // but second block starts at FAE_BLOCK_SIZE which equals aligned_size).
+  fae.truncate(FAE_BLOCK_SIZE / 2);
+  // aligned_size = FAE_BLOCK_SIZE; range_end = 2*FAE_BLOCK_SIZE > aligned_size
+  // so the second block should be erased
+  EXPECT_EQ(1u, fae.intervals.num_intervals());
+  EXPECT_TRUE(fae.intervals.contains(0));
+  EXPECT_FALSE(fae.intervals.contains(FAE_BLOCK_SIZE));
+}
+
 /*
  * Local Variables:
  * compile-command: "cd ../.. ;
