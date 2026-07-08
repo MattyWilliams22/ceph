@@ -7092,6 +7092,14 @@ int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
           std::max((uint64_t)op.extent.length, oi.size));
 	write_update_size_and_usage(ctx->delta_stats, oi, ctx->modified_ranges,
 	    0, op.extent.length, true);
+	if (pool.info.is_erasure() &&
+	    pool.info.allows_ecoptimizations() &&
+	    pool.info.tracks_zero_blocks()) {
+	  // WRITEFULL replaces the entire object: reset FAE and re-detect.
+	  oi.force_allocated_extents.clear();
+	  oi.force_allocated_extents.union_of(
+	    detect_zero_blocks(osd_op.indata, 0));
+	}
       }
       break;
 
@@ -7129,6 +7137,13 @@ int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	  ctx->clean_regions.mark_data_region_dirty(op.extent.offset, op.extent.length);
 	  ctx->delta_stats.num_wr++;
 	  oi.clear_data_digest();
+	  if (pool.info.is_erasure() &&
+	      pool.info.allows_ecoptimizations() &&
+	      pool.info.tracks_zero_blocks()) {
+	    // ZERO punches a hole: remove FAE entries for the zeroed region.
+	    oi.force_allocated_extents.remove(op.extent.offset,
+	                                      op.extent.length);
+	  }
 	} else {
 	  // no-op
 	}
@@ -7218,6 +7233,13 @@ int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	// do no set exists, or we will break above DELETE -> TRUNCATE munging.
 
 	oi.clear_data_digest();
+	if (pool.info.is_erasure() &&
+	    pool.info.allows_ecoptimizations() &&
+	    pool.info.tracks_zero_blocks()) {
+	  // TRUNCATE removes all data at or beyond the new size:
+	  // drop any FAE entries that fall beyond the truncate point.
+	  oi.force_allocated_extents.truncate(op.extent.offset);
+	}
       }
       break;
 
