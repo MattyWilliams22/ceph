@@ -1337,7 +1337,7 @@ struct pg_pool_t {
     // reads (MAPEXT / SPARSE_READ) and avoids unnecessary I/O for
     // all-zero stripe units.  Only meaningful on EC pools with
     // FLAG_EC_OPTIMIZATIONS; can be toggled without rebuilding existing data.
-    FLAG_TRACK_ZERO_BLOCKS = 1<<23,
+    FLAG_PRESERVE_ALLOCATION = 1<<23,
   };
 
   static const char *get_flag_name(uint64_t f) {
@@ -1365,7 +1365,7 @@ struct pg_pool_t {
     case FLAG_CLIENT_SPLIT_READS: return "split_reads";
     case FLAG_OMAP: return "supports_omap";
     case FLAG_CRIMSON_ALLOW_PG_MERGE: return "crimson_allow_pg_merge";
-    case FLAG_TRACK_ZERO_BLOCKS: return "track_zero_blocks";
+    case FLAG_PRESERVE_ALLOCATION: return "preserve_allocation";
     default: return "???";
     }
   }
@@ -1430,8 +1430,8 @@ struct pg_pool_t {
       return FLAG_CLIENT_SPLIT_READS;
     if (name == "supports_omap")
       return FLAG_OMAP;
-    if (name == "track_zero_blocks")
-      return FLAG_TRACK_ZERO_BLOCKS;
+    if (name == "preserve_allocation")
+      return FLAG_PRESERVE_ALLOCATION;
     return 0;
   }
 
@@ -1867,13 +1867,13 @@ public:
   /// Only meaningful for FastEC pools.
   bool tracks_zero_blocks() const {
     return is_erasure() && allows_ecoptimizations() &&
-           has_flag(FLAG_TRACK_ZERO_BLOCKS);
+           has_flag(FLAG_PRESERVE_ALLOCATION);
   }
   void enable_track_zero_blocks() {
-    set_flag(FLAG_TRACK_ZERO_BLOCKS);
+    set_flag(FLAG_PRESERVE_ALLOCATION);
   }
   void disable_track_zero_blocks() {
-    unset_flag(FLAG_TRACK_ZERO_BLOCKS);
+    unset_flag(FLAG_PRESERVE_ALLOCATION);
   }
 
   bool can_shift_osds() const {

@@ -2938,14 +2938,14 @@ TEST(ForceAllocatedExtents, TruncateUnalignedSizeRoundsUp)
 }
 
 // ---------------------------------------------------------------------------
-// US-1.2: FLAG_TRACK_ZERO_BLOCKS pool flag
+// US-1.2: FLAG_PRESERVE_ALLOCATION pool flag
 // ---------------------------------------------------------------------------
 
 TEST(pg_pool_t, TrackZeroBlocksFlagDefaultOff)
 {
   pg_pool_t pool;
   EXPECT_FALSE(pool.tracks_zero_blocks());
-  EXPECT_FALSE(pool.has_flag(pg_pool_t::FLAG_TRACK_ZERO_BLOCKS));
+  EXPECT_FALSE(pool.has_flag(pg_pool_t::FLAG_PRESERVE_ALLOCATION));
 }
 
 TEST(pg_pool_t, TrackZeroBlocksFlagEnableDisable)
@@ -2956,16 +2956,16 @@ TEST(pg_pool_t, TrackZeroBlocksFlagEnableDisable)
 
   pool.enable_track_zero_blocks();
   EXPECT_TRUE(pool.tracks_zero_blocks());
-  EXPECT_TRUE(pool.has_flag(pg_pool_t::FLAG_TRACK_ZERO_BLOCKS));
+  EXPECT_TRUE(pool.has_flag(pg_pool_t::FLAG_PRESERVE_ALLOCATION));
 
   pool.disable_track_zero_blocks();
   EXPECT_FALSE(pool.tracks_zero_blocks());
-  EXPECT_FALSE(pool.has_flag(pg_pool_t::FLAG_TRACK_ZERO_BLOCKS));
+  EXPECT_FALSE(pool.has_flag(pg_pool_t::FLAG_PRESERVE_ALLOCATION));
 }
 
 TEST(pg_pool_t, TrackZeroBlocksFlagDoesNotConflict)
 {
-  // FLAG_TRACK_ZERO_BLOCKS must not share bits with any other flag.
+  // FLAG_PRESERVE_ALLOCATION must not share bits with any other flag.
   const uint64_t all_other_flags =
     pg_pool_t::FLAG_HASHPSPOOL        |
     pg_pool_t::FLAG_FULL              |
@@ -2989,15 +2989,15 @@ TEST(pg_pool_t, TrackZeroBlocksFlagDoesNotConflict)
     pg_pool_t::FLAG_EC_OPTIMIZATIONS  |
     pg_pool_t::FLAG_CLIENT_SPLIT_READS |
     pg_pool_t::FLAG_OMAP;
-  EXPECT_EQ(0u, (uint64_t)pg_pool_t::FLAG_TRACK_ZERO_BLOCKS & all_other_flags);
+  EXPECT_EQ(0u, (uint64_t)pg_pool_t::FLAG_PRESERVE_ALLOCATION & all_other_flags);
 }
 
 TEST(pg_pool_t, TrackZeroBlocksFlagNameRoundTrip)
 {
-  EXPECT_STREQ("track_zero_blocks",
-               pg_pool_t::get_flag_name(pg_pool_t::FLAG_TRACK_ZERO_BLOCKS));
-  EXPECT_EQ((uint64_t)pg_pool_t::FLAG_TRACK_ZERO_BLOCKS,
-            pg_pool_t::get_flag_by_name("track_zero_blocks"));
+  EXPECT_STREQ("preserve_allocation",
+               pg_pool_t::get_flag_name(pg_pool_t::FLAG_PRESERVE_ALLOCATION));
+  EXPECT_EQ((uint64_t)pg_pool_t::FLAG_PRESERVE_ALLOCATION,
+            pg_pool_t::get_flag_by_name("preserve_allocation"));
 }
 
 TEST(pg_pool_t, TrackZeroBlocksFlagInFlagsString)
@@ -3005,7 +3005,7 @@ TEST(pg_pool_t, TrackZeroBlocksFlagInFlagsString)
   pg_pool_t pool;
   pool.enable_track_zero_blocks();
   const std::string s = pool.get_flags_string();
-  EXPECT_NE(std::string::npos, s.find("track_zero_blocks"));
+  EXPECT_NE(std::string::npos, s.find("preserve_allocation"));
 }
 
 /*

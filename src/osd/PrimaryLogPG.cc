@@ -168,7 +168,7 @@ static bool should_track_zero_blocks(
   }
   if (ctx->op && ctx->op->get_req()) {
     const auto *m = ctx->op->get_req<MOSDOp>();
-    if (m && m->has_flag(CEPH_OSD_FLAG_TRACK_ZERO_BLOCKS)) {
+    if (m && m->has_flag(CEPH_OSD_FLAG_PRESERVE_ALLOCATION)) {
       return true;
     }
   }

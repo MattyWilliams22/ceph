@@ -38,7 +38,7 @@ protected:
       ASSERT_EQ("", set_pool_flags_pp(
         it->second,
         rados,
-        pg_pool_t::FLAG_TRACK_ZERO_BLOCKS,
+        pg_pool_t::FLAG_PRESERVE_ALLOCATION,
         true));
       rados.wait_for_latest_osdmap();
     }
@@ -1267,20 +1267,20 @@ INSTANTIATE_TEST_SUITE_P(
 );
 
 // ---------------------------------------------------------------------------
-// Tests for the per-request MOSDOp flag CEPH_OSD_FLAG_TRACK_ZERO_BLOCKS /
-// OPERATION_TRACK_ZERO_BLOCKS.
+// Tests for the per-request MOSDOp flag CEPH_OSD_FLAG_PRESERVE_ALLOCATION /
+// OPERATION_PRESERVE_ALLOCATION.
 //
-// All tests use a FastEC pool whose pool-level FLAG_TRACK_ZERO_BLOCKS is
+// All tests use a FastEC pool whose pool-level FLAG_PRESERVE_ALLOCATION is
 // explicitly *disabled*, verifying that the per-request flag alone is
 // sufficient to trigger zero-block tracking.
 // ---------------------------------------------------------------------------
 
 /**
- * Test fixture for the per-request TRACK_ZERO_BLOCKS MOSDOp flag.
+ * Test fixture for the per-request PRESERVE_ALLOCATION MOSDOp flag.
  *
- * Unlike SparseReadTest, the pool-level FLAG_TRACK_ZERO_BLOCKS is intentionally
+ * Unlike SparseReadTest, the pool-level FLAG_PRESERVE_ALLOCATION is intentionally
  * left unset.  Each test that needs tracking must pass
- * librados::OPERATION_TRACK_ZERO_BLOCKS to ioctx.operate().
+ * librados::OPERATION_PRESERVE_ALLOCATION to ioctx.operate().
  */
 class SparseReadFlagTest : public ::testing::Test {
 protected:
@@ -1297,7 +1297,7 @@ protected:
     ASSERT_EQ("", set_allow_ec_overwrites_pp(pool_name, rados, true));
     // Explicitly ensure the pool flag is off.
     ASSERT_EQ("", set_pool_flags_pp(
-      pool_name, rados, pg_pool_t::FLAG_TRACK_ZERO_BLOCKS, false));
+      pool_name, rados, pg_pool_t::FLAG_PRESERVE_ALLOCATION, false));
     rados.wait_for_latest_osdmap();
   }
 
@@ -1353,7 +1353,7 @@ protected:
     ObjectWriteOperation op;
     op.write(offset, bl);
     return ioctx.operate(oid, &op,
-                         librados::OPERATION_TRACK_ZERO_BLOCKS);
+                         librados::OPERATION_PRESERVE_ALLOCATION);
   }
 };
 
@@ -1402,7 +1402,7 @@ TEST_F(SparseReadFlagTest, FlagWritefullZeroSetsFAE) {
   ObjectWriteOperation op;
   op.write_full(zero_bl);
   ASSERT_EQ(0, ioctx.operate(oid, &op,
-                              librados::OPERATION_TRACK_ZERO_BLOCKS));
+                              librados::OPERATION_PRESERVE_ALLOCATION));
 
   auto fae = get_force_allocated_extents(oid);
   ASSERT_TRUE(fae.has_value());
@@ -1435,7 +1435,7 @@ TEST_F(SparseReadFlagTest, FlagWritefullNonZeroClearsFAE) {
   ObjectWriteOperation op;
   op.write_full(data_bl);
   ASSERT_EQ(0, ioctx.operate(oid, &op,
-                              librados::OPERATION_TRACK_ZERO_BLOCKS));
+                              librados::OPERATION_PRESERVE_ALLOCATION));
 
   ASSERT_FALSE(get_force_allocated_extents(oid).has_value());
 }
@@ -1457,7 +1457,7 @@ TEST_F(SparseReadFlagTest, FlagZeroOpRemovesFAE) {
   ObjectWriteOperation op;
   op.zero(0, 4096);
   ASSERT_EQ(0, ioctx.operate(oid, &op,
-                              librados::OPERATION_TRACK_ZERO_BLOCKS));
+                              librados::OPERATION_PRESERVE_ALLOCATION));
 
   auto fae = get_force_allocated_extents(oid);
   // Block at offset 4096 must still be tracked.
@@ -1507,7 +1507,7 @@ TEST_F(SparseReadFlagTest, FlagZeroOpMisalignedBothEndsPreservesEdgeFAE) {
   ObjectWriteOperation op;
   op.zero(2048, 2 * FAE_BLOCK_SIZE);
   ASSERT_EQ(0, ioctx.operate(oid, &op,
-                              librados::OPERATION_TRACK_ZERO_BLOCKS));
+                              librados::OPERATION_PRESERVE_ALLOCATION));
 
   auto fae = get_force_allocated_extents(oid);
   ASSERT_TRUE(fae.has_value());
@@ -1532,7 +1532,7 @@ TEST_F(SparseReadFlagTest, FlagZeroOpSubBlockPreservesFAE) {
   ObjectWriteOperation op;
   op.zero(1024, 512);
   ASSERT_EQ(0, ioctx.operate(oid, &op,
-                              librados::OPERATION_TRACK_ZERO_BLOCKS));
+                              librados::OPERATION_PRESERVE_ALLOCATION));
 
   auto fae = get_force_allocated_extents(oid);
   ASSERT_TRUE(fae.has_value());
@@ -1558,7 +1558,7 @@ TEST_F(SparseReadFlagTest, FlagTruncateRemovesFAEBeyondNewSize) {
   ObjectWriteOperation op;
   op.truncate(4096);
   ASSERT_EQ(0, ioctx.operate(oid, &op,
-                              librados::OPERATION_TRACK_ZERO_BLOCKS));
+                              librados::OPERATION_PRESERVE_ALLOCATION));
 
   auto fae = get_force_allocated_extents(oid);
   // Block 0 still within the object — must remain.
@@ -1619,7 +1619,7 @@ TEST_F(SparseReadFlagTest, FlagOnReplicatedPoolNoFAE) {
   ObjectWriteOperation op;
   op.write(0, zero_bl);
   ASSERT_EQ(0, rep_ioctx.operate(oid, &op,
-                                  librados::OPERATION_TRACK_ZERO_BLOCKS));
+                                  librados::OPERATION_PRESERVE_ALLOCATION));
 
   // Replicated pools never set FAE — the OI xattr may not exist at all.
   bufferlist bl;
