@@ -1092,7 +1092,8 @@ public:
   }
 
   template <typename IntervalSetT> requires is_interval_set_v<IntervalSetT>
-  void get_sparse_buffer(shard_id_t shard, bufferlist &bl_out, IntervalSetT &iset) {
+  void get_sparse_buffer(shard_id_t shard, bufferlist &bl_out, IntervalSetT &iset,
+                         const force_allocated_extents_t &force_allocated = {}) {
     ceph_assert(bl_out.length() == 0);
     if (!extent_maps.contains(shard)) {
       return;
@@ -1105,8 +1106,16 @@ public:
       for (const auto &bp : bl.buffers()) {
         uint64_t len = bp.length();
         if (!bp.is_zero_fast()) {
-          iset.insert(off, bp.length());
+          iset.insert(off, len);
           bl_out.append(bp);
+        } else if (!force_allocated.empty()) {
+          // Convert shard offset to object-level (RO) offset and check
+          // whether this zero buffer is covered by force_allocated_extents.
+          uint64_t ro_off = sinfo->shard_offset_to_ro_offset(shard, off);
+          if (force_allocated.intersects(ro_off, len)) {
+            iset.insert(off, len);
+            bl_out.append(bp);
+          }
         }
         off += len;
         bl_iter += len;

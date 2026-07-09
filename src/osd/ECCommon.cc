@@ -1751,14 +1751,91 @@ void ECCommon::RecoveryBackend::continue_recovery_op(
         after_progress.data_complete = true;
       }
 
+      const force_allocated_extents_t &fae =
+        op.recovery_info.oi.force_allocated_extents;
+      if (!fae.empty()) {
+        dout(20) << __func__ << ": force_allocated_extents active for "
+                 << op.hoid << ", " << fae.num_intervals()
+                 << " interval(s)" << dendl;
+      }
+
       for (auto &&pg_shard: op.missing_on) {
         m->pushes[pg_shard].push_back(PushOp());
         PushOp &pop = m->pushes[pg_shard].back();
         pop.soid = op.hoid;
         pop.version = op.recovery_info.oi.get_version_for_shard(pg_shard.shard);
 
-        op.returned_data->get_sparse_buffer(pg_shard.shard, pop.data, pop.data_included);
+        op.returned_data->get_sparse_buffer(pg_shard.shard, pop.data, pop.data_included, fae);
         ceph_assert(pop.data.length() == pop.data_included.size());
+
+        // Sub-Task 3: synthesise zero blocks for force-allocated extents that
+        // had no data on any surviving shard (the extent map had no entry for
+        // them at all, so get_sparse_buffer couldn't include them).
+        if (!fae.empty()) {
+          // Current recovery window in object-level (RO) bytes.
+          const uint64_t window_start =
+            op.recovery_progress.data_recovered_to;
+          const uint64_t window_end =
+            after_progress.data_recovered_to;
+
+          // FAE intervals clipped to the current window.
+          interval_set<uint64_t> fae_in_window;
+          fae_in_window.insert(window_start, window_end - window_start);
+          fae_in_window.intersection_of(fae.get_intervals());
+
+          // Collect all shard-level ranges that need zero-filling.
+          interval_set<uint64_t> to_synthesise;
+          for (auto [ro_off, ro_len] : fae_in_window) {
+            // Convert the RO range to shard-level offsets.  FAE intervals are
+            // always stripe-aligned so the chunk-offset helpers apply directly.
+            uint64_t shard_off = sinfo.ro_offset_to_prev_chunk_offset(ro_off);
+            uint64_t shard_end = sinfo.ro_offset_to_next_chunk_offset(
+              ro_off + ro_len);
+            to_synthesise.insert(shard_off, shard_end - shard_off);
+          }
+          // Remove ranges already populated by get_sparse_buffer.
+          to_synthesise.subtract(pop.data_included);
+
+          if (!to_synthesise.empty()) {
+            // to_synthesise and pop.data_included are disjoint (we subtracted
+            // above).  Rebuild pop.data in ascending offset order by merging
+            // the two disjoint interval sets, consuming old_data for ranges
+            // already present and appending zeros for synthesised ranges.
+            interval_set<uint64_t> old_included;
+            old_included.swap(pop.data_included);
+            bufferlist old_data;
+            old_data.swap(pop.data);
+
+            // Build the combined ordered set of (offset, source) pairs.
+            auto real_it = old_included.begin();
+            auto zero_it = to_synthesise.begin();
+            bufferlist::iterator old_bl_it = old_data.begin();
+
+            while (real_it != old_included.end() ||
+                   zero_it != to_synthesise.end()) {
+              bool take_real = (real_it != old_included.end()) &&
+                               (zero_it == to_synthesise.end() ||
+                                real_it.get_start() < zero_it.get_start());
+              if (take_real) {
+                uint64_t off = real_it.get_start();
+                uint64_t len = real_it.get_len();
+                old_bl_it.copy(len, pop.data);
+                pop.data_included.insert(off, len);
+                ++real_it;
+              } else {
+                uint64_t off = zero_it.get_start();
+                uint64_t len = zero_it.get_len();
+                dout(20) << __func__ << ": synthesising zero block for shard="
+                         << pg_shard.shard << " shard_off=" << off
+                         << " len=" << len << " (no data recovered)" << dendl;
+                pop.data.append_zero(len);
+                pop.data_included.insert(off, len);
+                ++zero_it;
+              }
+            }
+            ceph_assert(pop.data.length() == pop.data_included.size());
+          }
+        }
 
         dout(10) << __func__ << ": pop shard=" << pg_shard
                  << ", oid=" << pop.soid
