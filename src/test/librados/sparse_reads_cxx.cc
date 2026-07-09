@@ -134,24 +134,21 @@ TEST_P(SparseReadTest, BasicSparseRead) {
 // Test sparse_read with holes (unallocated regions)
 TEST_P(SparseReadTest, SparseReadWithHoles) {
   std::string oid = "sparse_read_holes";
-  
-  // Write data at offset 0 and 8192, leaving a hole at 4096
+
+  // Write data at offset 0 and 8192, leaving a hole at [4096, 8192)
   bufferlist write_bl1 = create_pattern_buffer(4096, 'A');
   bufferlist write_bl2 = create_pattern_buffer(4096, 'B');
-  
+
   ASSERT_EQ(0, ioctx.write(oid, write_bl1, write_bl1.length(), 0));
   ASSERT_EQ(0, ioctx.write(oid, write_bl2, write_bl2.length(), 8192));
 
-  // Sparse read should return two extents with a hole
-  std::map<uint64_t, uint64_t> extents;
-  bufferlist read_bl;
-  int ret = ioctx.sparse_read(oid, extents, read_bl, 12288, 0);
-  
-  ASSERT_EQ(ret, 2);
-  ASSERT_EQ(read_bl.length(), 8192u);
-  ASSERT_EQ(extents.size(), 2u);
-  ASSERT_EQ(extents[0], 4096u);
-  ASSERT_EQ(extents[8192], 4096u);
+  // sparse_read returns only allocated data: write_bl1 followed by write_bl2
+  bufferlist expected_data;
+  expected_data.append(write_bl1);
+  expected_data.append(write_bl2);
+
+  std::map<uint64_t, uint64_t> expected_extents = {{0, 4096}, {8192, 4096}};
+  verify_sparse_read(oid, 0, 12288, expected_extents, expected_data);
 }
 
 // Test sparse_read after writing zeros
@@ -381,44 +378,47 @@ TEST_P(SparseReadTest, MapextOperation) {
 // Test sparse read after partial overwrite
 TEST_P(SparseReadTest, PartialOverwrite) {
   std::string oid = "partial_overwrite";
-  
-  // Initial write
+
+  // Initial write of 8 KiB of 'H'
   bufferlist write_bl1 = create_pattern_buffer(8192, 'H');
   ASSERT_EQ(0, ioctx.write(oid, write_bl1, write_bl1.length(), 0));
 
-  // Partial overwrite in middle
+  // Partial overwrite of 2 KiB of 'I' at offset 3072
   bufferlist write_bl2 = create_pattern_buffer(2048, 'I');
   ASSERT_EQ(0, ioctx.write(oid, write_bl2, write_bl2.length(), 3072));
 
-  // Verify sparse read shows continuous extent
+  // Build the expected merged content: H[0..3072) + I[3072..5120) + H[5120..8192)
+  bufferlist expected_data;
+  expected_data.append(create_pattern_buffer(3072, 'H'));
+  expected_data.append(write_bl2);
+  expected_data.append(create_pattern_buffer(8192 - 5120, 'H'));
+
+  // The overwrite merges into one contiguous allocated extent
   std::map<uint64_t, uint64_t> expected_extents = {{0, 8192}};
-  bufferlist read_bl;
-  std::map<uint64_t, uint64_t> extents;
-  int ret = ioctx.sparse_read(oid, extents, read_bl, 8192, 0);
-  ASSERT_EQ(ret, 1);
-  ASSERT_EQ(read_bl.length(), 8192u);
-  ASSERT_EQ(extents, expected_extents);
+  verify_sparse_read(oid, 0, 8192, expected_extents, expected_data);
 }
 
 // Test sparse read with large object
 TEST_P(SparseReadTest, LargeObjectSparseRead) {
   std::string oid = "large_sparse";
-  
-  // Write data at various offsets to create sparse pattern
+
+  // Write identical 4 KiB 'J' blocks at offsets 0, 16384, and 32768
   bufferlist write_bl = create_pattern_buffer(4096, 'J');
-  
+
   ASSERT_EQ(0, ioctx.write(oid, write_bl, write_bl.length(), 0));
   ASSERT_EQ(0, ioctx.write(oid, write_bl, write_bl.length(), 16384));
   ASSERT_EQ(0, ioctx.write(oid, write_bl, write_bl.length(), 32768));
 
-  // Sparse read entire range
-  std::map<uint64_t, uint64_t> extents;
-  bufferlist read_bl;
-  int ret = ioctx.sparse_read(oid, extents, read_bl, 40960, 0);
-  
-  ASSERT_EQ(ret, 3);
-  ASSERT_EQ(read_bl.length(), 12288u);
-  ASSERT_EQ(extents.size(), 3u);
+  // sparse_read returns only the three allocated blocks concatenated
+  bufferlist expected_data;
+  expected_data.append(write_bl);
+  expected_data.append(write_bl);
+  expected_data.append(write_bl);
+
+  std::map<uint64_t, uint64_t> expected_extents = {
+    {0, 4096}, {16384, 4096}, {32768, 4096}
+  };
+  verify_sparse_read(oid, 0, 40960, expected_extents, expected_data);
 }
 
 // Test recovery scenario - write zeros and verify after recovery
@@ -732,24 +732,75 @@ TEST_P(SparseReadTest, ZeroOperationDeallocates) {
 // Test sparse read with offset and partial length
 TEST_P(SparseReadTest, SparseReadPartialRange) {
   std::string oid = "sparse_partial";
-  
-  // Write data at multiple offsets
+
+  // Write 'Q' blocks at offsets 0, 8192, and 16384 with a hole between each
   bufferlist write_bl = create_pattern_buffer(4096, 'Q');
   ASSERT_EQ(0, ioctx.write(oid, write_bl, write_bl.length(), 0));
   ASSERT_EQ(0, ioctx.write(oid, write_bl, write_bl.length(), 8192));
   ASSERT_EQ(0, ioctx.write(oid, write_bl, write_bl.length(), 16384));
-  
-  // Sparse read middle section only
-  std::map<uint64_t, uint64_t> extents;
-  bufferlist read_bl;
-  int ret = ioctx.sparse_read(oid, extents, read_bl, 8192, 4096);
-  
-  ASSERT_GE(ret, 0);
-  // Should only get data from the requested range
-  for (const auto& [offset, len] : extents) {
-    ASSERT_GE(offset, 4096u);
-    ASSERT_LE(offset + len, 12288u);
-  }
+
+  // Read [4096, 12288): only the block at offset 8192 falls in this range;
+  // the block at offset 0 is before the read window and the one at 16384 is
+  // beyond it.
+  std::map<uint64_t, uint64_t> expected_extents = {{8192, 4096}};
+  verify_sparse_read(oid, 4096, 8192, expected_extents, write_bl);
+}
+
+// Test sparse_read starting at a non-zero offset into the object
+TEST_P(SparseReadTest, SparseReadFromNonZeroOffset) {
+  std::string oid = "sparse_nonzero_offset";
+
+  // Write 'R' at [0, 4096) and 'S' at [8192, 12288), with a hole at [4096, 8192)
+  bufferlist bl_r = create_pattern_buffer(4096, 'R');
+  bufferlist bl_s = create_pattern_buffer(4096, 'S');
+  ASSERT_EQ(0, ioctx.write(oid, bl_r, bl_r.length(), 0));
+  ASSERT_EQ(0, ioctx.write(oid, bl_s, bl_s.length(), 8192));
+
+  // Read [8192, 16384): should see only the 'S' extent; the 'R' block is
+  // completely outside the read window.
+  std::map<uint64_t, uint64_t> expected_extents = {{8192, 4096}};
+  verify_sparse_read(oid, 8192, 8192, expected_extents, bl_s);
+}
+
+// Test sparse_read starting mid-extent (offset splits an allocated block)
+TEST_P(SparseReadTest, SparseReadOffsetSplitsExtent) {
+  std::string oid = "sparse_offset_splits";
+
+  // Write a single 8 KiB 'T' block at offset 0
+  bufferlist write_bl = create_pattern_buffer(8192, 'T');
+  ASSERT_EQ(0, ioctx.write(oid, write_bl, write_bl.length(), 0));
+
+  // Read [4096, 8192): only the second half of the block should be returned
+  bufferlist expected_data = create_pattern_buffer(4096, 'T');
+  std::map<uint64_t, uint64_t> expected_extents = {{4096, 4096}};
+  verify_sparse_read(oid, 4096, 4096, expected_extents, expected_data);
+}
+
+// Test sparse_read with length 0 on an object with data
+TEST_P(SparseReadTest, SparseReadZeroLength) {
+  std::string oid = "sparse_zero_length";
+
+  // Write some data so the object exists
+  bufferlist write_bl = create_pattern_buffer(4096, 'U');
+  ASSERT_EQ(0, ioctx.write(oid, write_bl, write_bl.length(), 0));
+
+  // A zero-length sparse_read should return 0 extents and an empty bufferlist
+  std::map<uint64_t, uint64_t> expected_extents;
+  bufferlist expected_data;
+  verify_sparse_read(oid, 0, 0, expected_extents, expected_data);
+}
+
+// Test sparse_read with length 0 at a non-zero offset
+TEST_P(SparseReadTest, SparseReadZeroLengthNonZeroOffset) {
+  std::string oid = "sparse_zero_length_offset";
+
+  bufferlist write_bl = create_pattern_buffer(4096, 'V');
+  ASSERT_EQ(0, ioctx.write(oid, write_bl, write_bl.length(), 0));
+
+  // Zero-length read at a non-zero offset should also return nothing
+  std::map<uint64_t, uint64_t> expected_extents;
+  bufferlist expected_data;
+  verify_sparse_read(oid, 2048, 0, expected_extents, expected_data);
 }
 
 // Test multiple sequential writes building up an object
