@@ -7101,9 +7101,7 @@ int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
           std::max((uint64_t)op.extent.length, oi.size));
 	write_update_size_and_usage(ctx->delta_stats, oi, ctx->modified_ranges,
 	    0, op.extent.length, true);
-	if (pool.info.is_erasure() &&
-	    pool.info.allows_ecoptimizations() &&
-	    pool.info.tracks_zero_blocks()) {
+	if (should_track_zero_blocks(pool.info, ctx)) {
 	  // WRITEFULL replaces the entire object: reset FAE and re-detect.
 	  oi.force_allocated_extents.clear();
 	  oi.force_allocated_extents.union_of(
