@@ -1864,8 +1864,10 @@ public:
 
   /// Returns true when the pool is configured to track force-allocated
   /// (all-zero) extents per object, enabling sparse read support.
+  /// Only meaningful for FastEC pools.
   bool tracks_zero_blocks() const {
-    return has_flag(FLAG_TRACK_ZERO_BLOCKS);
+    return is_erasure() && allows_ecoptimizations() &&
+           has_flag(FLAG_TRACK_ZERO_BLOCKS);
   }
   void enable_track_zero_blocks() {
     set_flag(FLAG_TRACK_ZERO_BLOCKS);
