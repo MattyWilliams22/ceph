@@ -1232,8 +1232,7 @@ void ECBackend::submit_transaction(
 int ECBackend::objects_read_sync(
   const hobject_t &hoid,
   uint64_t object_size,
-  const std::list<std::pair<ec_align_t,
-  std::pair<ceph::buffer::list*, Context*>>> &to_read,
+  const std::list<std::pair<ec_align_t, ec_read_op_t>> &to_read,
   CoroHandles coro)
 {
   int result = 0;
@@ -1354,15 +1353,14 @@ int ECBackend::objects_readv_sync(const hobject_t &hoid,
 void ECBackend::objects_read_async(
     const hobject_t &hoid,
     uint64_t object_size,
-    const list<pair<ec_align_t,
-                    pair<bufferlist*, Context*>>> &to_read,
+    const list<pair<ec_align_t, ec_read_op_t>> &to_read,
     Context *on_complete,
     bool fast_read) {
   map<hobject_t, std::list<ec_align_t>> reads;
 
   uint32_t flags = 0;
   extent_set es;
-  for (const auto &[read, ctx]: to_read) {
+  for (const auto &[read, op]: to_read) {
     pair<uint64_t, uint64_t> tmp;
     if (!cct->_conf->osd_ec_partial_reads) {
       tmp = sinfo.ro_offset_len_to_stripe_ro_offset_len(read.offset, read.size);
@@ -1384,8 +1382,7 @@ void ECBackend::objects_read_async(
   struct cb {
     ECBackend *ec;
     hobject_t hoid;
-    list<pair<ec_align_t,
-              pair<bufferlist*, Context*>>> to_read;
+    list<pair<ec_align_t, ec_read_op_t>> to_read;
     unique_ptr<Context> on_complete;
     CephContext *cct;
     cb(const cb &) = delete;
@@ -1393,8 +1390,7 @@ void ECBackend::objects_read_async(
 
     cb(ECBackend *ec,
        const hobject_t &hoid,
-       const list<pair<ec_align_t,
-                       pair<bufferlist*, Context*>>> &to_read,
+       const list<pair<ec_align_t, ec_read_op_t>> &to_read,
        Context *on_complete,
        CephContext *cct)
       : ec(ec),
@@ -1406,22 +1402,24 @@ void ECBackend::objects_read_async(
     void operator()(ECCommon::ec_extents_t &&results) {
       auto dpp = ec->get_parent()->get_dpp();
       ldpp_dout(dpp, 20) << "objects_read_async_cb: got: " << results
-			 << dendl;
+                         << dendl;
 
       auto &got = results.at(hoid);
 
       int r = 0;
-      for (auto &&[read, result]: to_read) {
-        auto &&[bufs, ctx] = result;
+      for (auto &&[read, op]: to_read) {
         if (got.err < 0) {
           // error handling
-          if (ctx) {
-            ctx->complete(got.err);
+          if (op.ctx) {
+            op.ctx->complete(got.err);
+          }
+          if (op.extent_cb) {
+            op.extent_cb(interval_set<uint64_t>{});
           }
           if (r == 0)
             r = got.err;
         } else {
-          ceph_assert(bufs);
+          ceph_assert(op.bl);
           uint64_t offset = read.offset;
           uint64_t length = read.size;
           auto range = got.emap.get_containing_range(offset, length);
@@ -1434,17 +1432,33 @@ void ECBackend::objects_read_async(
           ldpp_dout(dpp, 20) << "length: " << length << dendl;
           ldpp_dout(dpp, 20) << "range length: " << range_length << dendl;
           if (cct->_conf->bluestore_debug_inject_read_err &&
-            ECInject::test_parity_read(hoid)) {
+              ECInject::test_parity_read(hoid)) {
             length = range_length;
           }
           ceph_assert((offset + length) <= (range_offset + range_length));
-          bufs->substr_of(
+          op.bl->substr_of(
             range.first.get_val(),
             offset - range_offset,
             length);
-          if (ctx) {
-            ctx->complete(length);
-            ctx = nullptr;
+          if (op.extent_cb) {
+            // Intersect the pre-decode physical allocation with this region.
+            interval_set<uint64_t> sub;
+            for (auto [ro_off, ro_len] : got.ro_alloc) {
+              uint64_t lo = std::max(ro_off, offset);
+              uint64_t hi = std::min(ro_off + ro_len, offset + length);
+              if (lo < hi) {
+                sub.insert(lo, hi - lo);
+              }
+            }
+            op.extent_cb(std::move(sub));
+            // Also complete the finish context (e.g. to free MapExtResultEC /
+            // ToSparseReadResultEC).  extent_cb fires first to populate the
+            // result before the finisher runs.
+            if (op.ctx) {
+              op.ctx->complete(length);
+            }
+          } else if (op.ctx) {
+            op.ctx->complete(length);
           }
         }
       }
@@ -1455,8 +1469,8 @@ void ECBackend::objects_read_async(
     }
 
     ~cb() {
-      for (auto &&i: to_read) {
-        delete i.second.second;
+      for (auto &&[read, op]: to_read) {
+        delete op.ctx;
       }
       to_read.clear();
     }

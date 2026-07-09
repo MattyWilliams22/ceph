@@ -352,17 +352,16 @@ void PrimaryLogPG::OpContext::start_async_reads(PrimaryLogPG *pg)
 {
   inflightreads = 1;
   list<pair<boost::tuple<uint64_t, uint64_t, unsigned>,
-	    pair<bufferlist*, Context*> > > in;
+            ec_read_op_t>> in;
   in.swap(pending_async_reads);
   // TODO: drop the converter
-  list<pair<ec_align_t,
-	    pair<bufferlist*, Context*> > > in_native;
-  for (auto [align_tuple, ctx_pair] : in) {
+  list<pair<ec_align_t, ec_read_op_t>> in_native;
+  for (auto &[align_tuple, op] : in) {
     in_native.emplace_back(
       ec_align_t{
         align_tuple.get<0>(), align_tuple.get<1>(), align_tuple.get<2>()
       },
-      std::move(ctx_pair));
+      std::move(op));
   }
   pg->pgbackend->objects_read_async(
     obc->obs.oi.soid,
@@ -5580,8 +5579,8 @@ struct ToSparseReadResult : public Context {
   uint64_t data_offset;
   ceph_le64* len;
   ToSparseReadResult(int* result, bufferlist* bl, uint64_t offset,
-		     ceph_le64* len)
-    : result(result), data_bl(bl), data_offset(offset),len(len) {}
+                     ceph_le64* len)
+    : result(result), data_bl(bl), data_offset(offset), len(len) {}
   void finish(int r) override {
     if (r < 0) {
       *result = r;
@@ -5594,6 +5593,100 @@ struct ToSparseReadResult : public Context {
     encode(extents, outdata);
     encode_destructively(*data_bl, outdata);
     data_bl->swap(outdata);
+  }
+};
+
+/**
+ * Callback for Fast EC MAPEXT: receives the physically-allocated logical
+ * extents from the async read pipeline (via ec_read_op_t::extent_cb) and
+ * encodes them as a map<uint64_t,uint64_t> into osd_op.outdata, matching the
+ * format decoded by librados::IoCtxImpl::mapext.
+ */
+struct MapExtResultEC {
+  int* result;
+  bufferlist* outdata;
+  bufferlist discard_bl; // data read is discarded; we only want extents
+
+  MapExtResultEC(int* result, bufferlist* outdata)
+    : result(result), outdata(outdata) {}
+
+  std::function<void(interval_set<uint64_t>&&)> make_extent_cb() {
+    return [this](interval_set<uint64_t> &&alloc) {
+      map<uint64_t, uint64_t> ext_map;
+      for (auto [off, l] : alloc) {
+        ext_map.emplace(off, l);
+      }
+      encode(ext_map, *outdata);
+    };
+  }
+
+  Context* make_finish_ctx() {
+    struct Finish : public Context {
+      MapExtResultEC* owner;
+      explicit Finish(MapExtResultEC* o) : owner(o) {}
+      void finish(int r) override {
+        if (r < 0) {
+          *owner->result = r;
+        }
+        delete owner;
+      }
+    };
+    return new Finish(this);
+  }
+};
+
+/**
+ * Callback for Fast EC SPARSE_READ: receives the physically-allocated logical
+ * extents from the async read pipeline (via ec_read_op_t::extent_cb) and
+ * encodes them together with the data buffer into the sparse-read output format
+ * expected by librados::IoCtxImpl::sparse_read.
+ *
+ * Unlike ToSparseReadResult, this does NOT fabricate a single-extent map.
+ * The extent_cb is set on the ec_read_op_t; this Context handles the
+ * op-finisher protocol (called with total bytes read) and the final encoding.
+ */
+struct ToSparseReadResultEC {
+  int* result;
+  bufferlist* data_bl;
+  ceph_le64* len;
+  interval_set<uint64_t> extents; // populated by extent_cb before finish
+
+  ToSparseReadResultEC(int* result, bufferlist* bl, ceph_le64* len)
+    : result(result), data_bl(bl), len(len) {}
+
+  // Called by ECBackend::objects_read_async cb with the allocated sub-ranges.
+  std::function<void(interval_set<uint64_t>&&)> make_extent_cb() {
+    return [this](interval_set<uint64_t> &&alloc) {
+      extents = std::move(alloc);
+    };
+  }
+
+  // Called by the ReadFinisher with total bytes read.
+  Context* make_finish_ctx() {
+    struct Finish : public Context {
+      ToSparseReadResultEC* owner;
+      explicit Finish(ToSparseReadResultEC* o) : owner(o) {}
+      void finish(int r) override {
+        if (r < 0) {
+          *owner->result = r;
+          delete owner;
+          return;
+        }
+        *owner->result = 0;
+        *owner->len = r;
+        // Encode as map<uint64_t,uint64_t> of allocated extents + data.
+        map<uint64_t, uint64_t> ext_map;
+        for (auto [off, l] : owner->extents) {
+          ext_map.emplace(off, l);
+        }
+        bufferlist outdata;
+        encode(ext_map, outdata);
+        encode_destructively(*owner->data_bl, outdata);
+        owner->data_bl->swap(outdata);
+        delete owner;
+      }
+    };
+    return new Finish(this);
   }
 };
 
@@ -5770,7 +5863,7 @@ int PrimaryLogPG::do_checksum(OpContext *ctx, OSDOp& osd_op,
 
     ctx->pending_async_reads.push_back({
       {op.checksum.offset, op.checksum.length, op.flags},
-      {&checksum_ctx->read_bl, checksum_ctx}});
+      ec_read_op_t{&checksum_ctx->read_bl, checksum_ctx}});
 
     dout(10) << __func__ << ": async_read noted for " << soid << dendl;
     ctx->op_finishers[ctx->current_osd_subop_num].reset(
@@ -5940,7 +6033,7 @@ int PrimaryLogPG::do_extent_cmp(OpContext *ctx, OSDOp& osd_op)
 					      osd, soid, op.flags);
     ctx->pending_async_reads.push_back({
       {op.extent.offset, op.extent.length, op.flags},
-      {&extent_cmp_ctx->read_bl, extent_cmp_ctx}});
+      ec_read_op_t{&extent_cmp_ctx->read_bl, extent_cmp_ctx}});
 
     dout(10) << __func__ << ": async_read noted for " << soid << dendl;
 
@@ -6062,10 +6155,10 @@ int PrimaryLogPG::do_read(OpContext *ctx, OSDOp& osd_op) {
       ctx->pending_async_reads.push_back(
         make_pair(
           boost::make_tuple(op.extent.offset, op.extent.length, op.flags),
-          make_pair(&osd_op.outdata,
-		    new FillInVerifyExtent(&op.extent.length, &osd_op.rval,
-					   &osd_op.outdata, maybe_crc, oi.size,
-					   osd, soid, op.flags))));
+          ec_read_op_t{&osd_op.outdata,
+                       new FillInVerifyExtent(&op.extent.length, &osd_op.rval,
+                                             &osd_op.outdata, maybe_crc, oi.size,
+                                             osd, soid, op.flags)}));
       dout(10) << " async_read noted for " << soid << dendl;
 
       ctx->op_finishers[ctx->current_osd_subop_num].reset(
@@ -6135,17 +6228,40 @@ int PrimaryLogPG::do_sparse_read(OpContext *ctx, OSDOp& osd_op) {
   }
 
   ++ctx->num_read;
-  if (pool.info.is_erasure() && !ctx->op->ec_direct_read()) {
-    // translate sparse read to a normal one if not supported
+  if (pool.info.is_erasure() && !ctx->op->ec_direct_read()
+      && pool.info.allows_ecoptimizations()) {
+    // Fast EC: use the full async read pipeline which contacts all data shards
+    // and returns the physical allocation via extent_cb.
+    if (length > 0) {
+      auto *sr = new ToSparseReadResultEC(&osd_op.rval, &osd_op.outdata,
+                                         &op.extent.length);
+      ctx->pending_async_reads.push_back(
+        make_pair(
+          boost::make_tuple(offset, length, op.flags),
+          ec_read_op_t{&osd_op.outdata, sr->make_finish_ctx(),
+                       sr->make_extent_cb()}));
+      dout(10) << " async_read (sparse, Fast EC) noted for " << soid << dendl;
+
+      ctx->op_finishers[ctx->current_osd_subop_num].reset(
+        new ReadFinisher(osd_op));
+      bytes_read = length;
+    } else {
+      dout(10) << " sparse read ended up empty for " << soid << dendl;
+      map<uint64_t, uint64_t> extents;
+      encode(extents, osd_op.outdata);
+      bufferlist data_bl;
+      encode(data_bl, osd_op.outdata);
+    }
+  } else if (pool.info.is_erasure() && !ctx->op->ec_direct_read()) {
+    // Legacy EC: translate sparse read to a normal one (no hole detection).
 
     if (length > 0) {
       ctx->pending_async_reads.push_back(
         make_pair(
           boost::make_tuple(offset, length, op.flags),
-          make_pair(
-     &osd_op.outdata,
-     new ToSparseReadResult(&osd_op.rval, &osd_op.outdata, offset,
-  		   &op.extent.length))));
+          ec_read_op_t{&osd_op.outdata,
+                       new ToSparseReadResult(&osd_op.rval, &osd_op.outdata,
+                                             offset, &op.extent.length)}));
       dout(10) << " async_read (was sparse_read) noted for " << soid << dendl;
 
       ctx->op_finishers[ctx->current_osd_subop_num].reset(
@@ -6361,26 +6477,52 @@ int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 
     /* map extents */
     case CEPH_OSD_OP_MAPEXT:
-      tracepoint(osd, do_osd_op_pre_mapext, soid.oid.name.c_str(), soid.snap.val, op.extent.offset, op.extent.length);
-      if (pool.info.is_erasure()) {
-	result = -EOPNOTSUPP;
-	break;
+      tracepoint(osd, do_osd_op_pre_mapext, soid.oid.name.c_str(),
+                 soid.snap.val, op.extent.offset, op.extent.length);
+      if (pool.info.is_erasure() && !pool.info.allows_ecoptimizations()) {
+        result = -EOPNOTSUPP;
+        break;
       }
       ++ctx->num_read;
-      {
-	// read into a buffer
-	bufferlist bl;
-	int r = osd->store->fiemap(ch, ghobject_t(soid, ghobject_t::NO_GEN,
-						  info.pgid.shard),
-				   op.extent.offset, op.extent.length, bl);
-	auto bl_length = bl.length();
+      if (op_finisher != nullptr) {
+        // Second pass after async read completed: return the encoded result.
+        result = op_finisher->execute();
+      } else if (pool.info.is_erasure()) {
+        // Fast EC: issue an async read for the range to get physical allocation
+        // across all data shards.  The data itself is discarded; only the
+        // extent_cb result is used to build the output map.
+        uint64_t off = op.extent.offset;
+        uint64_t len = op.extent.length;
+        if (len > 0) {
+          auto *me = new MapExtResultEC(&osd_op.rval, &osd_op.outdata);
+          ctx->pending_async_reads.push_back(
+            make_pair(
+              boost::make_tuple(off, len, op.flags),
+              ec_read_op_t{&me->discard_bl, me->make_finish_ctx(),
+                           me->make_extent_cb()}));
+          dout(10) << " async mapext (Fast EC) noted for " << soid << dendl;
+          ctx->op_finishers[ctx->current_osd_subop_num].reset(
+            new ReadFinisher(osd_op));
+          result = 0;
+        } else {
+          map<uint64_t, uint64_t> empty;
+          encode(empty, osd_op.outdata);
+        }
+        ctx->delta_stats.num_rd++;
+      } else {
+        // Replicated pool: query BlueStore directly.
+        bufferlist bl;
+        int r = osd->store->fiemap(ch, ghobject_t(soid, ghobject_t::NO_GEN,
+                                                  info.pgid.shard),
+                                   op.extent.offset, op.extent.length, bl);
+        auto bl_length = bl.length();
         osd_op.outdata = std::move(bl);
-	if (r < 0)
-	  result = r;
-	else
-	  ctx->delta_stats.num_rd_kb += shift_round_up(bl_length, 10);
-	ctx->delta_stats.num_rd++;
-	dout(10) << " map_extents done on object " << soid << dendl;
+        if (r < 0)
+          result = r;
+        else
+          ctx->delta_stats.num_rd_kb += shift_round_up(bl_length, 10);
+        ctx->delta_stats.num_rd++;
+        dout(10) << " map_extents done on object " << soid << dendl;
       }
       break;
 
@@ -9664,7 +9806,7 @@ int PrimaryLogPG::do_copy_get(OpContext *ctx, bufferlist::const_iterator& bp,
 	ctx->pending_async_reads.push_back(
 	  make_pair(
 	    boost::make_tuple(cursor.data_offset, max_read, osd_op.op.flags),
-	    make_pair(&bl, cb)));
+	    ec_read_op_t{&bl, cb}));
 	cb->len = max_read;
 
         ctx->op_finishers[ctx->current_osd_subop_num].reset(

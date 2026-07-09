@@ -710,11 +710,51 @@ struct ClientReadCompleter final : ECCommon::ReadCompleter {
     dout(20) << __func__ << " completing hoid=" << hoid
              << " res=" << res << " req=" << req << dendl;
     extent_map result;
+    interval_set<uint64_t> ro_alloc;
     if (res.r == 0) {
       ceph_assert(res.errors.empty());
       dout(30) << __func__ << ": before decode: "
                << res.buffers_read.debug_string(2048, 0)
                << dendl;
+
+      // Compute physical allocation before zero-padding.
+      // A logical stripe is allocated iff every data shard has its chunk
+      // physically present.  Work in stripe-index space so extents from
+      // different shards (which cover non-overlapping logical byte ranges)
+      // can be intersected correctly.
+      const auto &sinfo = read_pipeline.sinfo;
+      const uint64_t chunk_size = sinfo.get_chunk_size();
+      const uint64_t stripe_width = sinfo.get_stripe_width();
+      bool first_shard = true;
+      interval_set<uint64_t> stripe_alloc; // stripe indices present on all shards
+      for (shard_id_t shard : sinfo.get_data_shards()) {
+        if (!res.buffers_read.contains_shard(shard)) {
+          // This shard is entirely absent; intersection becomes empty.
+          stripe_alloc.clear();
+          break;
+        }
+        // Convert this shard's extents to the set of stripe indices it covers.
+        interval_set<uint64_t> shard_stripes;
+        for (auto [off, len] : res.buffers_read.get_extent_set(shard)) {
+          // Shard extents must be chunk-size aligned in an EC pool.
+          uint64_t stripe_start = off / chunk_size;
+          uint64_t num_stripes = len / chunk_size;
+          if (num_stripes > 0) {
+            shard_stripes.insert(stripe_start, num_stripes);
+          }
+        }
+        if (first_shard) {
+          stripe_alloc = std::move(shard_stripes);
+          first_shard = false;
+        } else {
+          stripe_alloc.intersection_of(shard_stripes);
+        }
+      }
+      // Convert intersected stripe indices back to logical byte extents.
+      for (auto [stripe_start, num_stripes] : stripe_alloc) {
+        ro_alloc.insert(stripe_start * stripe_width, num_stripes * stripe_width);
+      }
+
       /* Decode any missing buffers */
       res.buffers_read.add_zero_padding_for_decode(req.zeros_for_decode);
       int r = res.buffers_read.decode(read_pipeline.ec_impl,
@@ -746,7 +786,8 @@ struct ClientReadCompleter final : ECCommon::ReadCompleter {
     dout(20) << __func__ << " calling complete_object with result="
              << result << dendl;
     status->complete_object(hoid, res.r, std::move(result),
-                            std::move(res.buffers_read));
+                            std::move(res.buffers_read),
+                            std::move(ro_alloc));
     read_pipeline.kick_reads();
   }
 

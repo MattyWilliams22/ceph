@@ -1,8 +1,10 @@
 // -*- mode:C++; tab-width:8; c-basic-offset:2; indent-tabs-mode:nil -*-
 // vim: ts=8 sw=2 sts=2 expandtab
 
+#include <iomanip>
 #include <map>
 #include <optional>
+#include <sstream>
 #include <string>
 
 #include "gtest/gtest.h"
@@ -73,6 +75,39 @@ protected:
     return bl;
   }
 
+  // Format a map<uint64_t,uint64_t> as "{[off,off+len), ...}" for debug output
+  static std::string format_extents(const std::map<uint64_t, uint64_t>& m) {
+    std::ostringstream os;
+    os << '{';
+    bool first = true;
+    for (const auto& [off, len] : m) {
+      if (!first) os << ", ";
+      os << '[' << off << ',' << off + len << ')';
+      first = false;
+    }
+    os << '}';
+    return os.str();
+  }
+
+  // Summarise bufferlist content as "len=N hex=[first 16 bytes...]"
+  static std::string format_bufferlist(const bufferlist& bl) {
+    std::ostringstream os;
+    os << "len=" << bl.length();
+    if (bl.length() > 0) {
+      os << " hex=[";
+      const size_t preview = std::min<size_t>(bl.length(), 16);
+      for (size_t i = 0; i < preview; i++) {
+        if (i) os << ' ';
+        os << std::hex << std::setw(2) << std::setfill('0')
+           << (unsigned char)bl[i];
+      }
+      os << std::dec;
+      if (bl.length() > preview) os << " ...";
+      os << ']';
+    }
+    return os.str();
+  }
+
   // Helper to verify sparse read results
   void verify_sparse_read(
       const std::string& oid,
@@ -83,10 +118,25 @@ protected:
     std::map<uint64_t, uint64_t> extents;
     bufferlist read_bl;
     int ret = ioctx.sparse_read(oid, extents, read_bl, length, offset);
-    ASSERT_EQ(ret, (int)expected_extents.size());
-    ASSERT_EQ(extents, expected_extents);
-    ASSERT_EQ(read_bl.length(), expected_data.length());
-    ASSERT_TRUE(read_bl.contents_equal(expected_data));
+    EXPECT_EQ(ret, (int)expected_extents.size())
+        << "sparse_read(" << oid << ", off=" << offset << ", len=" << length << ")"
+        << "\n  actual   extent count: " << ret
+        << "\n  expected extent count: " << (int)expected_extents.size();
+    EXPECT_EQ(extents, expected_extents)
+        << "sparse_read(" << oid << ", off=" << offset << ", len=" << length << ")"
+        << "\n  actual   extents: " << format_extents(extents)
+        << "\n  expected extents: " << format_extents(expected_extents);
+    EXPECT_EQ(read_bl.length(), expected_data.length())
+        << "sparse_read(" << oid << ", off=" << offset << ", len=" << length << ")"
+        << "\n  actual   data " << format_bufferlist(read_bl)
+        << "\n  expected data " << format_bufferlist(expected_data);
+    EXPECT_TRUE(read_bl.contents_equal(expected_data))
+        << "sparse_read(" << oid << ", off=" << offset << ", len=" << length << ")"
+        << "\n  actual   data " << format_bufferlist(read_bl)
+        << "\n  expected data " << format_bufferlist(expected_data);
+    if (::testing::Test::HasFailure()) {
+      FAIL() << "verify_sparse_read failed (see EXPECT failures above)";
+    }
   }
 
   // Helper to verify mapext results
@@ -97,8 +147,17 @@ protected:
       const std::map<uint64_t, uint64_t>& expected_extents) {
     std::map<uint64_t, uint64_t> extents;
     int ret = ioctx.mapext(oid, offset, length, extents);
-    ASSERT_EQ(ret, (int)expected_extents.size());
-    ASSERT_EQ(extents, expected_extents);
+    EXPECT_EQ(ret, (int)expected_extents.size())
+        << "mapext(" << oid << ", off=" << offset << ", len=" << length << ")"
+        << "\n  actual   extent count: " << ret
+        << "\n  expected extent count: " << (int)expected_extents.size();
+    EXPECT_EQ(extents, expected_extents)
+        << "mapext(" << oid << ", off=" << offset << ", len=" << length << ")"
+        << "\n  actual   extents: " << format_extents(extents)
+        << "\n  expected extents: " << format_extents(expected_extents);
+    if (::testing::Test::HasFailure()) {
+      FAIL() << "verify_mapext failed (see EXPECT failures above)";
+    }
   }
 
   std::optional<force_allocated_extents_t> get_force_allocated_extents(

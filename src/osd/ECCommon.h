@@ -61,6 +61,10 @@ struct ECCommon {
     int err;
     extent_map emap;
     ECUtil::shard_extent_map_t shard_extent_map;
+    // Logical byte ranges that were physically present across all data shards,
+    // computed pre-decode in ClientReadCompleter.  Empty on error or for pools
+    // that do not populate it (legacy EC, replicated).
+    interval_set<uint64_t> ro_alloc;
 
     void print(std::ostream &os) const {
       os << err << "," << emap;
@@ -269,13 +273,15 @@ struct ECCommon {
         const hobject_t &hoid,
         int err,
         extent_map &&buffers,
-        ECUtil::shard_extent_map_t &&shard_extent_map) {
+        ECUtil::shard_extent_map_t &&shard_extent_map,
+        interval_set<uint64_t> &&ro_alloc) {
       ceph_assert(objects_to_read);
       --objects_to_read;
       ceph_assert(!results.contains(hoid));
       results.emplace(hoid, ec_extent_t{
                         err, std::move(buffers),
-                        std::move(shard_extent_map)
+                        std::move(shard_extent_map),
+                        std::move(ro_alloc)
                       });
     }
 
