@@ -6115,8 +6115,6 @@ static constexpr uint32_t FAE_BITMAP_THRESHOLD = 128;
 // All byte offsets/lengths accepted by the mutating methods are rounded
 // outward to FAE_BLOCK_SIZE boundaries internally.
 struct force_allocated_extents_t {
-  interval_set<uint64_t> intervals;
-
   bool empty() const { return intervals.empty(); }
   void clear()       { intervals.clear(); }
 
@@ -6130,6 +6128,42 @@ struct force_allocated_extents_t {
   // Union all intervals from o into this set.
   void union_of(const force_allocated_extents_t& o) {
     intervals.union_of(o.intervals);
+  }
+
+  // Return true if [offset, offset+length) overlaps any force-allocated extent.
+  bool intersects(uint64_t offset, uint64_t length) const {
+    return intervals.intersects(offset, length);
+  }
+
+  // --- Query accessors (read-only view of the underlying interval set) ---
+
+  // Number of disjoint intervals in the set.
+  uint32_t num_intervals() const { return intervals.num_intervals(); }
+
+  // Total byte count covered by all intervals.
+  uint64_t size() const { return intervals.size(); }
+
+  // True if byte offset `pos` falls within any interval.
+  bool contains(uint64_t pos) const { return intervals.contains(pos); }
+
+  // True if the entire range [offset, offset+length) is covered.
+  bool contains(uint64_t offset, uint64_t length) const {
+    return intervals.contains(offset, length);
+  }
+
+  // Iterator to the first interval (pair<uint64_t start, uint64_t len>).
+  auto begin() const { return intervals.begin(); }
+  auto end()   const { return intervals.end(); }
+
+  // Read-only reference to the underlying interval set.
+  // Prefer the typed query methods above; this is provided for serialisation
+  // and testing code that needs direct interval_set access.
+  const interval_set<uint64_t>& get_intervals() const { return intervals; }
+
+  // Insert an exact (unrounded) interval [offset, offset+length).
+  // Use add() for the normal write path; this is for decode and test use only.
+  void insert_exact(uint64_t offset, uint64_t length) {
+    intervals.union_insert(offset, length);
   }
 
   // Mark [offset, offset+length) as force-allocated.
@@ -6151,6 +6185,9 @@ struct force_allocated_extents_t {
 
   void dump(ceph::Formatter *f) const;
   static std::list<force_allocated_extents_t> generate_test_instances();
+
+private:
+  interval_set<uint64_t> intervals;
 };
 WRITE_CLASS_ENCODER(force_allocated_extents_t)
 

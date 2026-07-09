@@ -196,7 +196,7 @@ TEST_P(SparseReadTest, WriteTracksAllZeroExtentOnFastEC) {
 
   interval_set<uint64_t> expected;
   expected.insert(0, FAE_BLOCK_SIZE);
-  ASSERT_EQ(expected, fae->intervals);
+  ASSERT_EQ(expected, fae->get_intervals());
 }
 
 TEST_P(SparseReadTest, WriteDoesNotTrackExtentWhenOnlyPrefixIsZero) {
@@ -228,7 +228,7 @@ TEST_P(SparseReadTest, WriteTracksOnlyFullyCoveredZeroBlocks) {
 
   interval_set<uint64_t> expected;
   expected.insert(4096, 8192);
-  ASSERT_EQ(expected, fae->intervals);
+  ASSERT_EQ(expected, fae->get_intervals());
 }
 
 TEST_P(SparseReadTest, WriteSkipsPartialLeadingBlock) {
@@ -900,7 +900,7 @@ TEST_P(SparseReadTest, WritefullZeroDataSetsFAE) {
 
   interval_set<uint64_t> expected;
   expected.insert(0, 8192);
-  ASSERT_EQ(expected, fae->intervals);
+  ASSERT_EQ(expected, fae->get_intervals());
 }
 
 // WRITEFULL replaces a larger object: previous FAE beyond new size is gone.
@@ -943,7 +943,7 @@ TEST_P(SparseReadTest, WritesameZeroPatternTracksFAE) {
 
   interval_set<uint64_t> expected;
   expected.insert(0, 16384);
-  ASSERT_EQ(expected, fae->intervals);
+  ASSERT_EQ(expected, fae->get_intervals());
 }
 
 // WRITESAME with a non-zero pattern must not set FAE.
@@ -979,8 +979,8 @@ TEST_P(SparseReadTest, TruncateRemovesFAEBeyondNewSize) {
     auto fae = get_force_allocated_extents(oid);
     ASSERT_TRUE(fae.has_value());
     // Both blocks should be tracked.
-    ASSERT_TRUE(fae->intervals.contains(0, FAE_BLOCK_SIZE));
-    ASSERT_TRUE(fae->intervals.contains(8192, FAE_BLOCK_SIZE));
+    ASSERT_TRUE(fae->contains(0, FAE_BLOCK_SIZE));
+    ASSERT_TRUE(fae->contains(8192, FAE_BLOCK_SIZE));
   }
 
   // Truncate to 4096: block at offset 8192 must be removed from FAE.
@@ -990,9 +990,9 @@ TEST_P(SparseReadTest, TruncateRemovesFAEBeyondNewSize) {
     auto fae = get_force_allocated_extents(oid);
     // Block 0 is still within the object — it should remain.
     ASSERT_TRUE(fae.has_value());
-    ASSERT_TRUE(fae->intervals.contains(0, FAE_BLOCK_SIZE));
+    ASSERT_TRUE(fae->contains(0, FAE_BLOCK_SIZE));
     // Block at 8192 is now beyond the object size — it must be gone.
-    ASSERT_FALSE(fae->intervals.intersects(8192, FAE_BLOCK_SIZE));
+    ASSERT_FALSE(fae->intersects(8192, FAE_BLOCK_SIZE));
   }
 }
 
@@ -1033,7 +1033,7 @@ TEST_P(SparseReadTest, TruncateExtendPreservesFAE) {
   auto fae_after = get_force_allocated_extents(oid);
   ASSERT_TRUE(fae_after.has_value());
   // The existing tracked block must still be there.
-  ASSERT_EQ(fae_before->intervals, fae_after->intervals);
+  ASSERT_EQ(fae_before->get_intervals(), fae_after->get_intervals());
 }
 
 // --- 8.7 ZERO ---
@@ -1053,7 +1053,7 @@ TEST_P(SparseReadTest, ZeroOpRemovesFAEForZeroedRegion) {
   {
     auto fae = get_force_allocated_extents(oid);
     ASSERT_TRUE(fae.has_value());
-    ASSERT_TRUE(fae->intervals.contains(0, 8192));
+    ASSERT_TRUE(fae->contains(0, 8192));
   }
 
   // ZERO the first 4 KiB — FAE entry for that block must be removed.
@@ -1065,8 +1065,8 @@ TEST_P(SparseReadTest, ZeroOpRemovesFAEForZeroedRegion) {
     auto fae = get_force_allocated_extents(oid);
     // The second block (offset 4096) must still be tracked.
     ASSERT_TRUE(fae.has_value());
-    ASSERT_FALSE(fae->intervals.intersects(0, FAE_BLOCK_SIZE));
-    ASSERT_TRUE(fae->intervals.contains(4096, FAE_BLOCK_SIZE));
+    ASSERT_FALSE(fae->intersects(0, FAE_BLOCK_SIZE));
+    ASSERT_TRUE(fae->contains(4096, FAE_BLOCK_SIZE));
   }
 }
 
@@ -1109,10 +1109,10 @@ TEST_P(SparseReadTest, ZeroOpPreservesFAEOutsideRange) {
   auto fae = get_force_allocated_extents(oid);
   ASSERT_TRUE(fae.has_value());
   // Blocks 0 and 2 must still be tracked.
-  ASSERT_TRUE(fae->intervals.contains(0, FAE_BLOCK_SIZE));
-  ASSERT_TRUE(fae->intervals.contains(8192, FAE_BLOCK_SIZE));
+  ASSERT_TRUE(fae->contains(0, FAE_BLOCK_SIZE));
+  ASSERT_TRUE(fae->contains(8192, FAE_BLOCK_SIZE));
   // Block 1 must be gone.
-  ASSERT_FALSE(fae->intervals.intersects(4096, FAE_BLOCK_SIZE));
+  ASSERT_FALSE(fae->intersects(4096, FAE_BLOCK_SIZE));
 }
 
 // ZERO with both an unaligned start and unaligned end: the partial leading
@@ -1131,7 +1131,7 @@ TEST_P(SparseReadTest, ZeroOpMisalignedBothEndsPreservesEdgeFAE) {
   {
     auto fae = get_force_allocated_extents(oid);
     ASSERT_TRUE(fae.has_value());
-    ASSERT_TRUE(fae->intervals.contains(0, 3 * FAE_BLOCK_SIZE));
+    ASSERT_TRUE(fae->contains(0, 3 * FAE_BLOCK_SIZE));
   }
 
   // ZERO [2048, 10240): offset=2048, length=8192.
@@ -1146,11 +1146,11 @@ TEST_P(SparseReadTest, ZeroOpMisalignedBothEndsPreservesEdgeFAE) {
   auto fae = get_force_allocated_extents(oid);
   ASSERT_TRUE(fae.has_value());
   // Block 0 (head): literal-zero write, not deallocated — FAE must remain.
-  ASSERT_TRUE(fae->intervals.contains(0, FAE_BLOCK_SIZE));
+  ASSERT_TRUE(fae->contains(0, FAE_BLOCK_SIZE));
   // Block 1 (interior): deallocated — FAE must be gone.
-  ASSERT_FALSE(fae->intervals.intersects(FAE_BLOCK_SIZE, FAE_BLOCK_SIZE));
+  ASSERT_FALSE(fae->intersects(FAE_BLOCK_SIZE, FAE_BLOCK_SIZE));
   // Block 2 (tail): literal-zero write, not deallocated — FAE must remain.
-  ASSERT_TRUE(fae->intervals.contains(2 * FAE_BLOCK_SIZE, FAE_BLOCK_SIZE));
+  ASSERT_TRUE(fae->contains(2 * FAE_BLOCK_SIZE, FAE_BLOCK_SIZE));
 }
 
 // ZERO with an unaligned end: the partial trailing block is written with
@@ -1175,11 +1175,11 @@ TEST_P(SparseReadTest, ZeroOpMisalignedEndPreservesTrailingFAE) {
   auto fae = get_force_allocated_extents(oid);
   ASSERT_TRUE(fae.has_value());
   // Block 0 was interior: deallocated, FAE must be gone.
-  ASSERT_FALSE(fae->intervals.intersects(0, FAE_BLOCK_SIZE));
+  ASSERT_FALSE(fae->intersects(0, FAE_BLOCK_SIZE));
   // Block 1 was tail: literal-zero write, FAE must remain.
-  ASSERT_TRUE(fae->intervals.contains(FAE_BLOCK_SIZE, FAE_BLOCK_SIZE));
+  ASSERT_TRUE(fae->contains(FAE_BLOCK_SIZE, FAE_BLOCK_SIZE));
   // Block 2 is beyond the range and untouched.
-  ASSERT_TRUE(fae->intervals.contains(2 * FAE_BLOCK_SIZE, FAE_BLOCK_SIZE));
+  ASSERT_TRUE(fae->contains(2 * FAE_BLOCK_SIZE, FAE_BLOCK_SIZE));
 }
 
 // ZERO entirely within one 4K block (sub-block range): the whole range is
@@ -1206,7 +1206,7 @@ TEST_P(SparseReadTest, ZeroOpSubBlockPreservesFAE) {
   // The FAE entry for block 0 must still be present.
   auto fae = get_force_allocated_extents(oid);
   ASSERT_TRUE(fae.has_value());
-  ASSERT_TRUE(fae->intervals.contains(0, FAE_BLOCK_SIZE));
+  ASSERT_TRUE(fae->contains(0, FAE_BLOCK_SIZE));
 }
 
 // Misaligned ZERO with both unaligned start and unaligned end: verifies that
@@ -1372,7 +1372,7 @@ TEST_F(SparseReadFlagTest, FlagWriteTracksZeroBlock) {
 
   interval_set<uint64_t> expected;
   expected.insert(0, FAE_BLOCK_SIZE);
-  ASSERT_EQ(expected, fae->intervals);
+  ASSERT_EQ(expected, fae->get_intervals());
 }
 
 // Writing non-zero data with the MOSDOp flag set must NOT populate FAE.
@@ -1409,7 +1409,7 @@ TEST_F(SparseReadFlagTest, FlagWritefullZeroSetsFAE) {
 
   interval_set<uint64_t> expected;
   expected.insert(0, 8192);
-  ASSERT_EQ(expected, fae->intervals);
+  ASSERT_EQ(expected, fae->get_intervals());
 }
 
 // WRITEFULL without the flag must NOT set FAE (pool flag also off).
@@ -1450,7 +1450,7 @@ TEST_F(SparseReadFlagTest, FlagZeroOpRemovesFAE) {
   {
     auto fae = get_force_allocated_extents(oid);
     ASSERT_TRUE(fae.has_value());
-    ASSERT_TRUE(fae->intervals.contains(0, 8192));
+    ASSERT_TRUE(fae->contains(0, 8192));
   }
 
   // ZERO the first block with the flag set.
@@ -1462,8 +1462,8 @@ TEST_F(SparseReadFlagTest, FlagZeroOpRemovesFAE) {
   auto fae = get_force_allocated_extents(oid);
   // Block at offset 4096 must still be tracked.
   ASSERT_TRUE(fae.has_value());
-  ASSERT_FALSE(fae->intervals.intersects(0, FAE_BLOCK_SIZE));
-  ASSERT_TRUE(fae->intervals.contains(4096, FAE_BLOCK_SIZE));
+  ASSERT_FALSE(fae->intersects(0, FAE_BLOCK_SIZE));
+  ASSERT_TRUE(fae->contains(4096, FAE_BLOCK_SIZE));
 }
 
 // ZERO op without the flag must NOT remove FAE entries (pool flag also off).
@@ -1484,7 +1484,7 @@ TEST_F(SparseReadFlagTest, NoFlagZeroOpPreservesFAE) {
   // FAE should be unchanged since neither the pool flag nor the op flag is set.
   auto fae_after = get_force_allocated_extents(oid);
   ASSERT_TRUE(fae_after.has_value());
-  ASSERT_EQ(fae_before->intervals, fae_after->intervals);
+  ASSERT_EQ(fae_before->get_intervals(), fae_after->get_intervals());
 }
 
 // Misaligned ZERO with the flag: unaligned start and end preserve edge FAE.
@@ -1497,7 +1497,7 @@ TEST_F(SparseReadFlagTest, FlagZeroOpMisalignedBothEndsPreservesEdgeFAE) {
   {
     auto fae = get_force_allocated_extents(oid);
     ASSERT_TRUE(fae.has_value());
-    ASSERT_TRUE(fae->intervals.contains(0, 3 * FAE_BLOCK_SIZE));
+    ASSERT_TRUE(fae->contains(0, 3 * FAE_BLOCK_SIZE));
   }
 
   // ZERO [2048, 10240) with the flag:
@@ -1512,11 +1512,11 @@ TEST_F(SparseReadFlagTest, FlagZeroOpMisalignedBothEndsPreservesEdgeFAE) {
   auto fae = get_force_allocated_extents(oid);
   ASSERT_TRUE(fae.has_value());
   // Block 0 (head): literal-zero write — FAE must remain.
-  ASSERT_TRUE(fae->intervals.contains(0, FAE_BLOCK_SIZE));
+  ASSERT_TRUE(fae->contains(0, FAE_BLOCK_SIZE));
   // Block 1 (interior): deallocated — FAE must be gone.
-  ASSERT_FALSE(fae->intervals.intersects(FAE_BLOCK_SIZE, FAE_BLOCK_SIZE));
+  ASSERT_FALSE(fae->intersects(FAE_BLOCK_SIZE, FAE_BLOCK_SIZE));
   // Block 2 (tail): literal-zero write — FAE must remain.
-  ASSERT_TRUE(fae->intervals.contains(2 * FAE_BLOCK_SIZE, FAE_BLOCK_SIZE));
+  ASSERT_TRUE(fae->contains(2 * FAE_BLOCK_SIZE, FAE_BLOCK_SIZE));
 }
 
 // Sub-block ZERO with the flag: range within one block, FAE preserved.
@@ -1536,7 +1536,7 @@ TEST_F(SparseReadFlagTest, FlagZeroOpSubBlockPreservesFAE) {
 
   auto fae = get_force_allocated_extents(oid);
   ASSERT_TRUE(fae.has_value());
-  ASSERT_TRUE(fae->intervals.contains(0, FAE_BLOCK_SIZE));
+  ASSERT_TRUE(fae->contains(0, FAE_BLOCK_SIZE));
 }
 
 // TRUNCATE with the MOSDOp flag must remove FAE entries beyond the new size.
@@ -1550,8 +1550,8 @@ TEST_F(SparseReadFlagTest, FlagTruncateRemovesFAEBeyondNewSize) {
   {
     auto fae = get_force_allocated_extents(oid);
     ASSERT_TRUE(fae.has_value());
-    ASSERT_TRUE(fae->intervals.contains(0, FAE_BLOCK_SIZE));
-    ASSERT_TRUE(fae->intervals.contains(8192, FAE_BLOCK_SIZE));
+    ASSERT_TRUE(fae->contains(0, FAE_BLOCK_SIZE));
+    ASSERT_TRUE(fae->contains(8192, FAE_BLOCK_SIZE));
   }
 
   // Truncate to 4096 bytes with the tracking flag.
@@ -1563,9 +1563,9 @@ TEST_F(SparseReadFlagTest, FlagTruncateRemovesFAEBeyondNewSize) {
   auto fae = get_force_allocated_extents(oid);
   // Block 0 still within the object — must remain.
   ASSERT_TRUE(fae.has_value());
-  ASSERT_TRUE(fae->intervals.contains(0, FAE_BLOCK_SIZE));
+  ASSERT_TRUE(fae->contains(0, FAE_BLOCK_SIZE));
   // Block at 8192 is beyond the new size — must be gone.
-  ASSERT_FALSE(fae->intervals.intersects(8192, FAE_BLOCK_SIZE));
+  ASSERT_FALSE(fae->intersects(8192, FAE_BLOCK_SIZE));
 }
 
 // TRUNCATE without the flag must NOT remove FAE entries (pool flag also off).
@@ -1587,7 +1587,7 @@ TEST_F(SparseReadFlagTest, NoFlagTruncatePreservesFAE) {
   auto fae_after = get_force_allocated_extents(oid);
   ASSERT_TRUE(fae_after.has_value());
   // Without the flag, the stale FAE entry at offset 8192 must still be there.
-  ASSERT_EQ(fae_before->intervals, fae_after->intervals);
+  ASSERT_EQ(fae_before->get_intervals(), fae_after->get_intervals());
 }
 
 // Writing multiple zero blocks with the flag tracks all of them.
@@ -1601,7 +1601,7 @@ TEST_F(SparseReadFlagTest, FlagWriteMultipleZeroBlocks) {
 
   interval_set<uint64_t> expected;
   expected.insert(0, 16384);
-  ASSERT_EQ(expected, fae->intervals);
+  ASSERT_EQ(expected, fae->get_intervals());
 }
 
 // The flag has no effect for non-EC (replicated) pools — no FAE is set.

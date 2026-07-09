@@ -7922,5 +7922,5 @@ force_allocated_extents_t::generate_test_instances()
 std::ostream& operator<<(std::ostream& out,
                          const force_allocated_extents_t& fae)
 {
-  return out << fae.intervals;
+  return out << fae.get_intervals();
 }

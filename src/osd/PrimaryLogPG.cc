@@ -152,7 +152,7 @@ static force_allocated_extents_t detect_zero_blocks(
 
     // Stage 2: full scan using mem_is_zero across all bufferptrs.
     if (block_bl.is_zero()) {
-      zero_blocks.intervals.insert(block_offset, FAE_BLOCK_SIZE);
+      zero_blocks.insert_exact(block_offset, FAE_BLOCK_SIZE);
     }
   }
 
