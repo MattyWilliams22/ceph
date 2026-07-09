@@ -1064,6 +1064,147 @@ TEST_P(SparseReadTest, ZeroOpPreservesFAEOutsideRange) {
   ASSERT_FALSE(fae->intervals.intersects(4096, FAE_BLOCK_SIZE));
 }
 
+// ZERO with both an unaligned start and unaligned end: the partial leading
+// and trailing blocks are written with literal zeros (not deallocated) so
+// their FAE entries are preserved; only the interior full block is removed.
+TEST_P(SparseReadTest, ZeroOpMisalignedBothEndsPreservesEdgeFAE) {
+  if (GetParam() != PoolType::FAST_EC) {
+    GTEST_SKIP() << "FAE tracking only on FastEC";
+  }
+
+  std::string oid = "zero_misaligned_start_fae";
+
+  // Write zeros across three 4K blocks so all three are FAE-tracked.
+  bufferlist zero_bl = create_zero_buffer(3 * FAE_BLOCK_SIZE);
+  ASSERT_EQ(0, ioctx.write(oid, zero_bl, zero_bl.length(), 0));
+  {
+    auto fae = get_force_allocated_extents(oid);
+    ASSERT_TRUE(fae.has_value());
+    ASSERT_TRUE(fae->intervals.contains(0, 3 * FAE_BLOCK_SIZE));
+  }
+
+  // ZERO [2048, 10240): offset=2048, length=8192.
+  //   interior_start = 4096, interior_end = 8192
+  //   head:     [2048, 4096) — literal-zero write into block 0
+  //   interior: [4096, 8192) — block 1 deallocated
+  //   tail:     [8192,10240) — literal-zero write into block 2
+  ObjectWriteOperation op;
+  op.zero(2048, 2 * FAE_BLOCK_SIZE);  // [2048, 10240)
+  ASSERT_EQ(0, ioctx.operate(oid, &op));
+
+  auto fae = get_force_allocated_extents(oid);
+  ASSERT_TRUE(fae.has_value());
+  // Block 0 (head): literal-zero write, not deallocated — FAE must remain.
+  ASSERT_TRUE(fae->intervals.contains(0, FAE_BLOCK_SIZE));
+  // Block 1 (interior): deallocated — FAE must be gone.
+  ASSERT_FALSE(fae->intervals.intersects(FAE_BLOCK_SIZE, FAE_BLOCK_SIZE));
+  // Block 2 (tail): literal-zero write, not deallocated — FAE must remain.
+  ASSERT_TRUE(fae->intervals.contains(2 * FAE_BLOCK_SIZE, FAE_BLOCK_SIZE));
+}
+
+// ZERO with an unaligned end: the partial trailing block is written with
+// literal zeros (not deallocated), so its FAE entry must be preserved.
+TEST_P(SparseReadTest, ZeroOpMisalignedEndPreservesTrailingFAE) {
+  if (GetParam() != PoolType::FAST_EC) {
+    GTEST_SKIP() << "FAE tracking only on FastEC";
+  }
+
+  std::string oid = "zero_misaligned_end_fae";
+
+  // Three FAE-tracked zero blocks.
+  bufferlist zero_bl = create_zero_buffer(3 * FAE_BLOCK_SIZE);
+  ASSERT_EQ(0, ioctx.write(oid, zero_bl, zero_bl.length(), 0));
+
+  // ZERO from offset 0 to 6144 (unaligned end inside block 1):
+  // block 0 is interior (deallocated), block 1 is tail (literal-zero write).
+  ObjectWriteOperation op;
+  op.zero(0, FAE_BLOCK_SIZE + 2048);  // [0, 6144)
+  ASSERT_EQ(0, ioctx.operate(oid, &op));
+
+  auto fae = get_force_allocated_extents(oid);
+  ASSERT_TRUE(fae.has_value());
+  // Block 0 was interior: deallocated, FAE must be gone.
+  ASSERT_FALSE(fae->intervals.intersects(0, FAE_BLOCK_SIZE));
+  // Block 1 was tail: literal-zero write, FAE must remain.
+  ASSERT_TRUE(fae->intervals.contains(FAE_BLOCK_SIZE, FAE_BLOCK_SIZE));
+  // Block 2 is beyond the range and untouched.
+  ASSERT_TRUE(fae->intervals.contains(2 * FAE_BLOCK_SIZE, FAE_BLOCK_SIZE));
+}
+
+// ZERO entirely within one 4K block (sub-block range): the whole range is
+// written with literal zeros.  No block is deallocated, so a pre-existing
+// FAE entry for that block must be preserved.
+TEST_P(SparseReadTest, ZeroOpSubBlockPreservesFAE) {
+  if (GetParam() != PoolType::FAST_EC) {
+    GTEST_SKIP() << "FAE tracking only on FastEC";
+  }
+
+  std::string oid = "zero_subblock_fae";
+
+  // Write one zero block so FAE has an entry for block 0.
+  bufferlist zero_bl = create_zero_buffer(FAE_BLOCK_SIZE);
+  ASSERT_EQ(0, ioctx.write(oid, zero_bl, zero_bl.length(), 0));
+  ASSERT_TRUE(get_force_allocated_extents(oid).has_value());
+
+  // ZERO a 512-byte sub-range entirely within block 0.  No full block is
+  // covered, so the operation is a literal-zero write — no deallocation.
+  ObjectWriteOperation op;
+  op.zero(1024, 512);
+  ASSERT_EQ(0, ioctx.operate(oid, &op));
+
+  // The FAE entry for block 0 must still be present.
+  auto fae = get_force_allocated_extents(oid);
+  ASSERT_TRUE(fae.has_value());
+  ASSERT_TRUE(fae->intervals.contains(0, FAE_BLOCK_SIZE));
+}
+
+// Misaligned ZERO with both unaligned start and unaligned end: verifies that
+// data content is correct for all three regions after the operation.
+//
+// Layout (3 blocks of 'Z', ZERO [2048, 10240)):
+//   [0,    2048): untouched, still 'Z'           (before ZERO, in block 0)
+//   [2048, 4096): zero                            (head write into block 0)
+//   [4096, 8192): zero                            (interior: block 1 deallocated)
+//   [8192,10240): zero                            (tail write into block 2)
+//   [10240,12288): untouched, still 'Z'           (after ZERO, in block 2)
+TEST_P(SparseReadTest, ZeroOpMisalignedDataCorrectness) {
+  std::string oid = "zero_misaligned_data";
+
+  // Write a recognisable non-zero pattern across three 4K blocks.
+  bufferlist data_bl = create_pattern_buffer(3 * FAE_BLOCK_SIZE, 'Z');
+  ASSERT_EQ(0, ioctx.write(oid, data_bl, data_bl.length(), 0));
+
+  // ZERO [2048, 10240): offset=2048, length=8192.
+  //   interior_start = round_up(2048, 4096)    = 4096
+  //   interior_end   = round_down(10240, 4096) = 8192
+  //   head  write: [2048, 4096)
+  //   dealloc:     [4096, 8192)
+  //   tail  write: [8192, 10240)
+  ObjectWriteOperation op;
+  op.zero(2048, 2 * FAE_BLOCK_SIZE);
+  ASSERT_EQ(0, ioctx.operate(oid, &op));
+
+  bufferlist read_bl;
+  ASSERT_EQ(3 * (int)FAE_BLOCK_SIZE,
+            ioctx.read(oid, read_bl, 3 * FAE_BLOCK_SIZE, 0));
+
+  // [0, 2048): untouched, still 'Z'.
+  bufferlist before_zero;
+  before_zero.substr_of(read_bl, 0, 2048);
+  ASSERT_TRUE(before_zero.contents_equal(create_pattern_buffer(2048, 'Z')));
+
+  // [2048, 10240): all zeros (head + interior + tail).
+  bufferlist zeroed_section;
+  zeroed_section.substr_of(read_bl, 2048, 2 * FAE_BLOCK_SIZE);
+  ASSERT_TRUE(zeroed_section.contents_equal(create_zero_buffer(2 * FAE_BLOCK_SIZE)));
+
+  // [10240, 12288): untouched, still 'Z'.
+  bufferlist after_zero;
+  after_zero.substr_of(read_bl, 10240, FAE_BLOCK_SIZE - 2048);
+  ASSERT_TRUE(after_zero.contents_equal(
+    create_pattern_buffer(FAE_BLOCK_SIZE - 2048, 'Z')));
+}
+
 // Instantiate tests for both Replicated and FastEC pools
 INSTANTIATE_TEST_SUITE_P(
   SparseReadTests,
