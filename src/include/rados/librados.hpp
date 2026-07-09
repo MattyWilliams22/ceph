@@ -292,6 +292,8 @@ inline namespace v14_2_0 {
     OPERATION_ORDERSNAP          = LIBRADOS_OPERATION_ORDERSNAP,
     // enable/allow return value and per-op return code/buffers
     OPERATION_RETURNVEC          = LIBRADOS_OPERATION_RETURNVEC,
+    // enable per-request zero-block tracking for EC pools (force_allocated_extents)
+    OPERATION_TRACK_ZERO_BLOCKS  = LIBRADOS_OPERATION_TRACK_ZERO_BLOCKS,
   };
 
   /*
