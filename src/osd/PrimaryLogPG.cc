@@ -164,6 +164,26 @@ static force_allocated_extents_t detect_zero_blocks(
   return zero_blocks;
 }
 
+// Returns true if zero-block tracking (force_allocated_extents) should be
+// performed for this operation.  Tracking is enabled by either the pool-level
+// flag (track_zero_blocks) or the per-request MOSDOp flag
+// (CEPH_OSD_FLAG_TRACK_ZERO_BLOCKS).
+static bool should_track_zero_blocks(
+  const pg_pool_t& pool_info,
+  PrimaryLogPG::OpContext *ctx)
+{
+  if (pool_info.tracks_zero_blocks()) {
+    return true;
+  }
+  if (ctx->op && ctx->op->get_req()) {
+    const auto *m = ctx->op->get_req<MOSDOp>();
+    if (m && m->has_flag(CEPH_OSD_FLAG_TRACK_ZERO_BLOCKS)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /**
  * The CopyCallback class defines an interface for completions to the
  * copy_start code. Users of the copy infrastructure must implement
