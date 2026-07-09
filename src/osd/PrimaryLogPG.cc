@@ -164,10 +164,6 @@ static force_allocated_extents_t detect_zero_blocks(
   return zero_blocks;
 }
 
-// Returns true if zero-block tracking (force_allocated_extents) should be
-// performed for this operation.  Tracking is enabled by either the pool-level
-// flag (track_zero_blocks) or the per-request MOSDOp flag
-// (CEPH_OSD_FLAG_TRACK_ZERO_BLOCKS).
 static bool should_track_zero_blocks(
   const pg_pool_t& pool_info,
   PrimaryLogPG::OpContext *ctx)
@@ -7061,9 +7057,7 @@ int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	write_update_size_and_usage(ctx->delta_stats, oi, ctx->modified_ranges,
 				    op.extent.offset, op.extent.length);
 	ctx->clean_regions.mark_data_region_dirty(op.extent.offset, op.extent.length);
-	if (pool.info.is_erasure() &&
-	    pool.info.allows_ecoptimizations() &&
-	    pool.info.tracks_zero_blocks()) {
+	if (should_track_zero_blocks(pool.info, ctx)) {
 	  if (op.extent.length > 0) {
 	    oi.force_allocated_extents.remove(op.extent.offset,
 	                                      op.extent.length);
@@ -7253,9 +7247,7 @@ int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	// do no set exists, or we will break above DELETE -> TRUNCATE munging.
 
 	oi.clear_data_digest();
-	if (pool.info.is_erasure() &&
-	    pool.info.allows_ecoptimizations() &&
-	    pool.info.tracks_zero_blocks()) {
+	if (should_track_zero_blocks(pool.info, ctx)) {
 	  // TRUNCATE removes all data at or beyond the new size:
 	  // drop any FAE entries that fall beyond the truncate point.
 	  oi.force_allocated_extents.truncate(op.extent.offset);
