@@ -142,21 +142,16 @@ static force_allocated_extents_t detect_zero_blocks(
     bufferlist block_bl;
     block_bl.substr_of(bl, in_bl_offset, FAE_BLOCK_SIZE);
 
-    auto first = block_bl.cbegin();
-    auto ptr = first.get_current_ptr();
-    if (ptr.length() < sizeof(uint64_t) ||
-        *reinterpret_cast<const uint64_t*>(ptr.c_str()) != 0) {
+    // Stage 1: cheap check — if the first word of the first bufferptr is
+    // non-zero the block cannot be all-zero; skip the full scan.
+    const auto& first_ptr = block_bl.front();
+    if (first_ptr.length() >= sizeof(uint64_t) &&
+        !mem_is_zero(first_ptr.c_str(), sizeof(uint64_t))) {
       continue;
-        }
-
-    bool all_zero = true;
-    for (auto bp = block_bl.buffers().begin(); bp != block_bl.buffers().end(); ++bp) {
-      if (!mem_is_zero(bp->c_str(), bp->length())) {
-        all_zero = false;
-        break;
-      }
     }
-    if (all_zero) {
+
+    // Stage 2: full scan using mem_is_zero across all bufferptrs.
+    if (block_bl.is_zero()) {
       zero_blocks.intervals.insert(block_offset, FAE_BLOCK_SIZE);
     }
   }
