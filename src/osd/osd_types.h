@@ -6098,96 +6098,112 @@ inline static const bool should_whiteout(
 // EC operations, LUKS2, and fscrypt block sizes).
 static constexpr uint64_t FAE_BLOCK_SIZE = 4096;
 
-static constexpr uint32_t FAE_BITMAP_THRESHOLD = 128;
+// Approximate byte cost of one std::map node used by the bitmap merge/split
+// heuristic (key + value + 3 pointers + colour, rounded to a cache line).
+static constexpr uint32_t FAE_MAP_NODE_BYTES = 48;
+
+// One bitmap entry in the bitmap map.  The map key is the FAE_BLOCK_SIZE-
+// aligned byte offset of the first block; `span_blocks` is how many blocks
+// this bitmap covers; `words` is the packed bitmap (one bit per block, LSB =
+// lowest block).  An empty `words` vector is the single-block fast-path:
+// it represents exactly one set block at the key offset.
+struct fae_bitmap_t {
+  uint64_t span_blocks = 0;
+  std::vector<uint64_t> words;
+
+  // Number of set bits.
+  uint32_t popcount() const;
+  // True when every bit in [bit_start, bit_start+bit_len) is clear.
+  bool range_empty(const uint64_t bit_start, const uint64_t bit_len) const;
+};
 
 // Tracks which 4 KiB blocks of an erasure-coded object must be treated as
 // force-allocated (non-sparse) even though they contain only zeroes.
 //
-// The struct is embedded in object_info_t and serialised with it; there is no
-// separate xattr.  Internally the set is always an interval_set<uint64_t>,
-// but on encode a hybrid representation is chosen automatically:
-//   variant 0 (interval list) – when num_intervals() <= FAE_BITMAP_THRESHOLD
-//   variant 1 (bitmap)        – when num_intervals() >  FAE_BITMAP_THRESHOLD
+// Internally the set is a std::map<uint64_t, fae_bitmap_t> where each key is
+// a block-aligned byte offset and each value is a bitmap covering one
+// or more contiguous blocks.  The map stays locally optimal: adjacent bitmaps
+// are merged when the merge costs fewer bytes than two separate map nodes,
+// and a bitmap is split when a gap inside it is large enough to justify the
+// extra map node.
 //
-// The bitmap variant derives its block count from the highest interval end in
-// the set, so no external object_size parameter is needed.
+// Deferred decode: decode() stores raw bytes and sets dirty_=false; bitmaps_
+// is populated lazily on first access via materialise().  encode() skips
+// re-encoding when !dirty_ and raw_ is non-empty (zero-copy fast path).
 //
 // All byte offsets/lengths accepted by the mutating methods are rounded
 // outward to FAE_BLOCK_SIZE boundaries internally.
 struct force_allocated_extents_t {
-  bool empty() const { return intervals.empty(); }
-  void clear()       { intervals.clear(); }
+  void add(const uint64_t offset, const uint64_t length);
+  void remove(const uint64_t offset, const uint64_t length);
+  void truncate(const uint64_t new_size);
+  void clear() { materialise(); dirty_ = true; raw_.clear(); bitmaps_.clear(); }
+  void insert_exact(const uint64_t offset, const uint64_t length);
+  void union_of(const force_allocated_extents_t& o);
 
-  bool operator==(const force_allocated_extents_t& o) const {
-    return intervals == o.intervals;
-  }
+  bool empty() const { materialise(); return bitmaps_.empty(); }
+  bool operator==(const force_allocated_extents_t& o) const;
   bool operator!=(const force_allocated_extents_t& o) const {
     return !(*this == o);
   }
+  bool intersects(const uint64_t offset, const uint64_t length) const;
+  uint32_t num_intervals() const;
+  uint64_t size() const;
+  bool contains(const uint64_t pos) const;
+  bool contains(const uint64_t offset, const uint64_t length) const;
 
-  // Union all intervals from o into this set.
-  void union_of(const force_allocated_extents_t& o) {
-    intervals.union_of(o.intervals);
-  }
+  struct const_iterator {
+    using value_type        = std::pair<uint64_t, uint64_t>;
+    using difference_type   = std::ptrdiff_t;
+    using pointer           = const value_type*;
+    using reference         = const value_type&;
+    using iterator_category = std::forward_iterator_tag;
 
-  // Return true if [offset, offset+length) overlaps any force-allocated extent.
-  bool intersects(uint64_t offset, uint64_t length) const {
-    return intervals.intersects(offset, length);
-  }
+    const_iterator() = default;
+    explicit const_iterator(
+      std::map<uint64_t, fae_bitmap_t>::const_iterator map_it,
+      std::map<uint64_t, fae_bitmap_t>::const_iterator map_end);
 
-  // --- Query accessors (read-only view of the underlying interval set) ---
+    reference operator*()  const { return current_; }
+    pointer   operator->() const { return &current_; }
+    const_iterator& operator++();
+    const_iterator  operator++(int) { auto t = *this; ++(*this); return t; }
+    bool operator==(const const_iterator& o) const {
+      return map_it_ == o.map_it_ && bit_ == o.bit_;
+    }
+    bool operator!=(const const_iterator& o) const { return !(*this == o); }
 
-  // Number of disjoint intervals in the set.
-  uint32_t num_intervals() const { return intervals.num_intervals(); }
+  private:
+    void advance_to_set_bit();
+    std::map<uint64_t, fae_bitmap_t>::const_iterator map_it_;
+    std::map<uint64_t, fae_bitmap_t>::const_iterator map_end_;
+    uint64_t   bit_ = 0;
+    value_type current_{};
+  };
 
-  // Total byte count covered by all intervals.
-  uint64_t size() const { return intervals.size(); }
+  const_iterator begin() const;
+  const_iterator end()   const;
 
-  // True if byte offset `pos` falls within any interval.
-  bool contains(uint64_t pos) const { return intervals.contains(pos); }
+  interval_set<uint64_t> get_intervals() const;
 
-  // True if the entire range [offset, offset+length) is covered.
-  bool contains(uint64_t offset, uint64_t length) const {
-    return intervals.contains(offset, length);
-  }
-
-  // Iterator to the first interval (pair<uint64_t start, uint64_t len>).
-  auto begin() const { return intervals.begin(); }
-  auto end()   const { return intervals.end(); }
-
-  // Read-only reference to the underlying interval set.
-  // Prefer the typed query methods above; this is provided for serialisation
-  // and testing code that needs direct interval_set access.
-  const interval_set<uint64_t>& get_intervals() const { return intervals; }
-
-  // Insert an exact (unrounded) interval [offset, offset+length).
-  // Use add() for the normal write path; this is for decode and test use only.
-  void insert_exact(uint64_t offset, uint64_t length) {
-    intervals.union_insert(offset, length);
-  }
-
-  // Mark [offset, offset+length) as force-allocated.
-  // Rounded outward to FAE_BLOCK_SIZE.
-  void add(uint64_t offset, uint64_t length);
-
-  // Unmark [offset, offset+length).
-  // Rounded outward to FAE_BLOCK_SIZE.
-  void remove(uint64_t offset, uint64_t length);
-
-  // Drop all extents at byte offset >= new_size.
-  void truncate(uint64_t new_size);
-
-  // Hybrid encode: variant 0 (interval list) when
-  // num_intervals() <= FAE_BITMAP_THRESHOLD, variant 1 (bitmap) otherwise.
-  // Compatible with WRITE_CLASS_ENCODER — no extra arguments required.
   void encode(ceph::buffer::list& bl) const;
   void decode(ceph::buffer::list::const_iterator& p);
-
   void dump(ceph::Formatter *f) const;
   static std::list<force_allocated_extents_t> generate_test_instances();
 
 private:
-  interval_set<uint64_t> intervals;
+  mutable std::map<uint64_t, fae_bitmap_t> bitmaps_;
+  mutable ceph::buffer::list raw_;   ///< cached encoded bytes (deferred decode)
+  mutable bool dirty_ = true;        ///< true when bitmaps_ is authoritative
+
+  // Parse raw_ into bitmaps_ on first access, then clear raw_.
+  void materialise() const;
+
+  static uint32_t bitmap_cost(const fae_bitmap_t& c);
+  std::map<uint64_t, fae_bitmap_t>::iterator
+    try_merge_with_right(std::map<uint64_t, fae_bitmap_t>::iterator it);
+  std::map<uint64_t, fae_bitmap_t>::iterator
+    try_split_at(std::map<uint64_t, fae_bitmap_t>::iterator it);
 };
 WRITE_CLASS_ENCODER(force_allocated_extents_t)
 

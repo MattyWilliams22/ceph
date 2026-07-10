@@ -2715,24 +2715,20 @@ TEST(ForceAllocatedExtents, DecodeEmptyBufferlist)
   EXPECT_TRUE(out.empty());
 }
 
-TEST(ForceAllocatedExtents, EncodeDecodeVariant0SmallSet)
+TEST(ForceAllocatedExtents, EncodeDecodeV2SmallSet)
 {
-  // Fewer intervals than threshold → variant 0 (interval list)
+  // v2 format: two disjoint blocks — round-trip correctness.
   force_allocated_extents_t fae;
   fae.insert_exact(0, 4096);
   fae.insert_exact(8192, 4096);
   ceph::buffer::list bl;
   fae.encode(bl);
-  // Verify variant byte is 0 (after ENCODE_START 6-byte header: v, compat, len32)
+
+  // Verify struct_v == 2 (first byte of ENCODE_START header).
   auto raw = bl.cbegin();
-  uint8_t _v1, _v2;
-  uint32_t _len;
-  decode(_v1, raw);  // struct_v
-  decode(_v2, raw);  // compat_v
-  decode(_len, raw); // length
-  uint8_t variant;
-  decode(variant, raw);
-  EXPECT_EQ(0u, variant);
+  uint8_t sv;
+  decode(sv, raw);
+  EXPECT_EQ(2u, sv);
 
   auto p = bl.cbegin();
   force_allocated_extents_t out;
@@ -2740,11 +2736,11 @@ TEST(ForceAllocatedExtents, EncodeDecodeVariant0SmallSet)
   EXPECT_EQ(fae.get_intervals(), out.get_intervals());
 }
 
-TEST(ForceAllocatedExtents, EncodeDecodeVariant1BitmapAboveThreshold)
+TEST(ForceAllocatedExtents, EncodeDecodeManyIntervalsRoundTrip)
 {
-  // FAE_BITMAP_THRESHOLD + 1 disjoint 4K intervals → variant 1 (bitmap)
+  // 129 disjoint 4K intervals — round-trip correctness with v2 chunk format.
   force_allocated_extents_t fae;
-  uint32_t n = FAE_BITMAP_THRESHOLD + 1;
+  constexpr uint32_t n = 129;
   for (uint32_t i = 0; i < n; ++i) {
     fae.insert_exact(uint64_t{i} * 2 * FAE_BLOCK_SIZE, FAE_BLOCK_SIZE);
   }
@@ -2752,35 +2748,20 @@ TEST(ForceAllocatedExtents, EncodeDecodeVariant1BitmapAboveThreshold)
 
   ceph::buffer::list bl;
   fae.encode(bl);
-
-  // Check the variant byte is 1 (after ENCODE_START 6-byte header)
-  auto raw = bl.cbegin();
-  uint8_t _v1, _v2;
-  uint32_t _len;
-  decode(_v1, raw);
-  decode(_v2, raw);
-  decode(_len, raw);
-  uint8_t variant;
-  decode(variant, raw);
-  EXPECT_EQ(1u, variant);
-
-  // Full round-trip
   auto p = bl.cbegin();
   force_allocated_extents_t out;
   out.decode(p);
   EXPECT_EQ(fae.get_intervals(), out.get_intervals());
 }
 
-TEST(ForceAllocatedExtents, EncodeDecodeVariant1ContiguousBitsMerged)
+TEST(ForceAllocatedExtents, EncodeDecodeContiguousBlocksMerged)
 {
-  // Contiguous set bits in bitmap should decode to a single merged interval.
-  // Build a set with >FAE_BITMAP_THRESHOLD disjoint entries so the bitmap
-  // path is exercised, plus 3 adjacent blocks at offset 0 to verify merging.
+  // 3 adjacent blocks at offset 0 plus many disjoint blocks elsewhere.
+  // After round-trip, the first interval must still be the merged 3-block run.
   force_allocated_extents_t fae;
   fae.insert_exact(0, 3 * FAE_BLOCK_SIZE);
-  uint32_t n = FAE_BITMAP_THRESHOLD; // exactly at threshold still uses list
   uint64_t base = 1000 * FAE_BLOCK_SIZE;
-  for (uint32_t i = 0; i < n; ++i) {
+  for (uint32_t i = 0; i < 128; ++i) {
     fae.insert_exact(base + uint64_t{i} * 2 * FAE_BLOCK_SIZE, FAE_BLOCK_SIZE);
   }
 
@@ -2790,7 +2771,7 @@ TEST(ForceAllocatedExtents, EncodeDecodeVariant1ContiguousBitsMerged)
   force_allocated_extents_t out;
   out.decode(p);
   EXPECT_EQ(fae.get_intervals(), out.get_intervals());
-  // The first 3 contiguous blocks must decode back as a single interval
+  // The first 3 contiguous blocks must decode back as a single interval.
   auto it = out.begin();
   auto [first_start, first_len] = *it;
   EXPECT_EQ(0u, first_start);
@@ -2935,6 +2916,33 @@ TEST(ForceAllocatedExtents, TruncateUnalignedSizeRoundsUp)
   EXPECT_EQ(1u, fae.num_intervals());
   EXPECT_TRUE(fae.contains(0));
   EXPECT_FALSE(fae.contains(FAE_BLOCK_SIZE));
+}
+
+TEST(ForceAllocatedExtents, ZeroDecodeFastPath)
+{
+  // Encode an FAE, decode it into a new instance, then immediately re-encode
+  // without calling any read accessor.  The output bytes must equal the input
+  // bytes and chunks_ must never have been populated (deferred decode).
+  force_allocated_extents_t src;
+  src.add(0, FAE_BLOCK_SIZE);
+  src.add(8 * FAE_BLOCK_SIZE, 3 * FAE_BLOCK_SIZE);
+
+  ceph::buffer::list encoded;
+  src.encode(encoded);
+
+  force_allocated_extents_t decoded;
+  auto p = encoded.cbegin();
+  decoded.decode(p);
+
+  // Re-encode without touching any accessor — must return identical bytes.
+  ceph::buffer::list re_encoded;
+  decoded.encode(re_encoded);
+
+  EXPECT_EQ(encoded.length(), re_encoded.length());
+  EXPECT_EQ(0, memcmp(encoded.c_str(), re_encoded.c_str(), encoded.length()));
+
+  // Now verify the data is still correct after materialisation.
+  EXPECT_EQ(src.get_intervals(), decoded.get_intervals());
 }
 
 // ---------------------------------------------------------------------------
