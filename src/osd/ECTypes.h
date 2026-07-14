@@ -15,8 +15,12 @@
 
 #pragma once
 
+#include <functional>
+#include "include/interval_set.h"
 #include "include/types.h"
 #include "common/mini_flat_map.h"
+
+class Context;
 
 struct ec_align_t {
   uint64_t offset;
@@ -30,6 +34,30 @@ struct ec_align_t {
   void print(std::ostream &os) const {
     os << offset << "," << size << "," << flags;
   }
+};
+
+/**
+ * Per-region result descriptor for objects_read_async.
+ *
+ * The mandatory fields (bl, ctx) mirror the old pair<bufferlist*, Context*>.
+ * The optional extent_cb, when set (Fast EC only), is invoked with the
+ * physically-allocated logical sub-ranges actually present for this region.
+ * This allows callers such as SPARSE_READ and MAPEXT to return accurate
+ * hole information without fabricating a single-extent map.
+ */
+struct ec_read_op_t {
+  ceph::buffer::list *bl;
+  Context *ctx;
+  // Optional: called (instead of ctx->complete) with the set of logical
+  // byte ranges within [align.offset, align.offset+align.size) that were
+  // physically present across all data shards.  Null for normal reads.
+  std::function<void(interval_set<uint64_t>&&)> extent_cb;
+
+  ec_read_op_t(ceph::buffer::list *bl, Context *ctx)
+    : bl(bl), ctx(ctx) {}
+  ec_read_op_t(ceph::buffer::list *bl, Context *ctx,
+               std::function<void(interval_set<uint64_t>&&)> extent_cb)
+    : bl(bl), ctx(ctx), extent_cb(std::move(extent_cb)) {}
 };
 
 struct raw_shard_id_t {

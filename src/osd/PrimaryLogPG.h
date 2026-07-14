@@ -775,9 +775,9 @@ public:
 
     bool sent_reply = false;
 
-    // pending async reads <off, len, op_flags> -> <outbl, outr>
+    // pending async reads <off, len, op_flags> -> ec_read_op_t
     std::list<std::pair<boost::tuple<uint64_t, uint64_t, unsigned>,
-	      std::pair<ceph::buffer::list*, Context*> > > pending_async_reads;
+              ec_read_op_t>> pending_async_reads;
     int inflightreads;
     friend struct OnReadComplete;
     void start_async_reads(PrimaryLogPG *pg);
@@ -839,13 +839,11 @@ public:
     ~OpContext() {
       ceph_assert(!op_t);
       if (reply)
-	reply->put();
-      for (std::list<std::pair<boost::tuple<uint64_t, uint64_t, unsigned>,
-		     std::pair<ceph::buffer::list*, Context*> > >::iterator i =
-	     pending_async_reads.begin();
-	   i != pending_async_reads.end();
-	   pending_async_reads.erase(i++)) {
-	delete i->second.second;
+        reply->put();
+      for (auto i = pending_async_reads.begin();
+           i != pending_async_reads.end();
+           pending_async_reads.erase(i++)) {
+        delete i->second.ctx;
       }
     }
     uint64_t get_features() {

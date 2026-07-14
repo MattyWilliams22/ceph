@@ -268,8 +268,8 @@ public:
     }
 
     ec_align_t align{off, len, op_flags};
-    std::list<std::pair<ec_align_t, std::pair<bufferlist*, Context*>>> to_read;
-    to_read.push_back({ align, { bl, nullptr } });
+    std::list<std::pair<ec_align_t, ec_read_op_t>> to_read;
+    to_read.push_back({ align, ec_read_op_t{bl, nullptr} });
     return optimized.objects_read_sync(hoid, object_size, to_read, *coro);
   }
 
@@ -304,16 +304,13 @@ public:
   void objects_read_async(
     const hobject_t &hoid,
     uint64_t object_size,
-    const std::list<std::pair<ec_align_t,
-                              std::pair<ceph::buffer::list*, Context*>>> &
-    to_read,
+    const std::list<std::pair<ec_align_t, ec_read_op_t>> &to_read,
     Context *on_complete, bool fast_read = false) override
   {
     if (is_optimized()) {
       optimized.objects_read_async(hoid, object_size, to_read, on_complete,
                                    fast_read);
-    }
-    else {
+    } else {
       legacy.objects_read_async(hoid, object_size, to_read, on_complete,
                                 fast_read);
     }

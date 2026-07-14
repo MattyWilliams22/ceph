@@ -186,8 +186,7 @@ public:
   void objects_read_async(
     const hobject_t &hoid,
     uint64_t object_size,
-    const std::list<std::pair<ec_align_t,
-      std::pair<ceph::buffer::list*, Context*>>> &to_read,
+    const std::list<std::pair<ec_align_t, ec_read_op_t>> &to_read,
     Context *on_complete, bool fast_read = false) override {
   }
 

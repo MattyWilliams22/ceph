@@ -1586,16 +1586,15 @@ int ECBackendL::objects_read_local(
 void ECBackendL::objects_read_async(
   const hobject_t &hoid,
   uint64_t object_size,
-  const list<pair<ec_align_t,
-                  pair<bufferlist*, Context*>>> &to_read,
+  const list<pair<ec_align_t, ec_read_op_t>> &to_read,
   Context *on_complete,
   bool fast_read)
 {
-  map<hobject_t,std::list<ec_align_t>> reads;
+  map<hobject_t, std::list<ec_align_t>> reads;
 
   uint32_t flags = 0;
   extent_set es;
-  for (const auto& [read, ctx] : to_read) {
+  for (const auto& [read, op] : to_read) {
     pair<uint64_t, uint64_t> tmp;
     if (!cct->_conf->osd_ec_partial_reads || fast_read) {
       tmp = sinfo.offset_len_to_stripe_bounds(make_pair(read.offset, read.size));
@@ -1608,9 +1607,7 @@ void ECBackendL::objects_read_async(
 
   if (!es.empty()) {
     auto &offsets = reads[hoid];
-    for (auto j = es.begin();
-	 j != es.end();
-	 ++j) {
+    for (auto j = es.begin(); j != es.end(); ++j) {
       offsets.emplace_back(ec_align_t{j.get_start(), j.get_len(), flags});
     }
   }
@@ -1618,22 +1615,20 @@ void ECBackendL::objects_read_async(
   struct cb {
     ECBackendL *ec;
     hobject_t hoid;
-    list<pair<ec_align_t,
-	      pair<bufferlist*, Context*> > > to_read;
+    list<pair<ec_align_t, ec_read_op_t>> to_read;
     unique_ptr<Context> on_complete;
     CephContext *cct;
     cb(const cb&) = delete;
     cb(cb &&) = default;
     cb(ECBackendL *ec,
        const hobject_t &hoid,
-       const list<pair<ec_align_t,
-                  pair<bufferlist*, Context*> > > &to_read,
+       const list<pair<ec_align_t, ec_read_op_t>> &to_read,
        Context *on_complete,
        CephContext *cct)
       : ec(ec),
-	hoid(hoid),
-	to_read(to_read),
-	on_complete(on_complete),
+        hoid(hoid),
+        to_read(to_read),
+        on_complete(on_complete),
         cct(cct) {}
     void operator()(ECCommonL::ec_extents_t &&results) {
       auto dpp = ec->get_parent()->get_dpp();
@@ -1645,23 +1640,23 @@ void ECBackendL::objects_read_async(
       auto &got = results[hoid];
 
       int r = 0;
-      for (auto &&read: to_read) {
-	if (got.err < 0) {
-	  // error handling
-	  if (read.second.second) {
-	    read.second.second->complete(got.err);
-	  }
-	  if (r == 0)
-	    r = got.err;
-	} else {
-	  ceph_assert(read.second.first);
-	  uint64_t offset = read.first.offset;
-	  uint64_t length = read.first.size;
-	  auto range = got.emap.get_containing_range(offset, length);
-	  uint64_t range_offset = range.first.get_off();
-	  uint64_t range_length = range.first.get_len();
-	  ceph_assert(range.first != range.second);
-	  ceph_assert(range_offset <= offset);
+      for (auto &&[read, op] : to_read) {
+        if (got.err < 0) {
+          // error handling
+          if (op.ctx) {
+            op.ctx->complete(got.err);
+          }
+          if (r == 0)
+            r = got.err;
+        } else {
+          ceph_assert(op.bl);
+          uint64_t offset = read.offset;
+          uint64_t length = read.size;
+          auto range = got.emap.get_containing_range(offset, length);
+          uint64_t range_offset = range.first.get_off();
+          uint64_t range_length = range.first.get_len();
+          ceph_assert(range.first != range.second);
+          ceph_assert(range_offset <= offset);
           ldpp_dout(dpp, 20) << "offset: " << offset << dendl;
           ldpp_dout(dpp, 20) << "range offset: " << range_offset << dendl;
           ldpp_dout(dpp, 20) << "length: " << length << dendl;
@@ -1671,15 +1666,14 @@ void ECBackendL::objects_read_async(
               ECInject::test_parity_read(hoid)) {
             length = range_length;
           }
-	  read.second.first->substr_of(
-	    range.first.get_val(),
-	    offset - range_offset,
-	    length);
-	  if (read.second.second) {
-	    read.second.second->complete(length);
-	    read.second.second = nullptr;
-	  }
-	}
+          op.bl->substr_of(
+            range.first.get_val(),
+            offset - range_offset,
+            length);
+          if (op.ctx) {
+            op.ctx->complete(length);
+          }
+        }
       }
       to_read.clear();
       if (on_complete) {
@@ -1687,8 +1681,8 @@ void ECBackendL::objects_read_async(
       }
     }
     ~cb() {
-      for (auto &&i: to_read) {
-	delete i.second.second;
+      for (auto &&[read, op] : to_read) {
+        delete op.ctx;
       }
       to_read.clear();
     }
