@@ -166,7 +166,7 @@ static bool should_track_zero_blocks(
   if (pool_info.tracks_zero_blocks()) {
     return true;
   }
-  if (ctx->op && ctx->op->get_req()) {
+  if (pool_info.is_erasure() && ctx->op && ctx->op->get_req()) {
     const auto *m = ctx->op->get_req<MOSDOp>();
     if (m && m->has_flag(CEPH_OSD_FLAG_PRESERVE_ALLOCATION)) {
       return true;
