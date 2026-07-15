@@ -423,9 +423,6 @@ TEST_P(SparseReadTest, LargeObjectSparseRead) {
 
 // Test recovery scenario - write zeros and verify after recovery
 TEST_P(SparseReadTest, RecoveryWithZeros) {
-  if (GetParam() == PoolType::FAST_EC) {
-    GTEST_SKIP() << "Skipping Recovery test on FastEC (currently hanging)";
-  }
   turn_balancing_off();
 
   std::string oid = "recovery_zeros";
@@ -448,9 +445,6 @@ TEST_P(SparseReadTest, RecoveryWithZeros) {
 
 // Test recovery scenario - mixed data and verify allocation state
 TEST_P(SparseReadTest, RecoveryMixedData) {
-  if (GetParam() == PoolType::FAST_EC) {
-    GTEST_SKIP() << "Skipping Recovery test on FastEC (currently hanging)";
-  }
   turn_balancing_off();
 
   std::string oid = "recovery_mixed";
@@ -485,9 +479,6 @@ TEST_P(SparseReadTest, RecoveryMixedData) {
 
 // Test recovery after truncate
 TEST_P(SparseReadTest, RecoveryAfterTruncate) {
-  if (GetParam() == PoolType::FAST_EC) {
-    GTEST_SKIP() << "Skipping Recovery test on FastEC (currently hanging)";
-  }
   turn_balancing_off();
 
   std::string oid = "recovery_truncate";
@@ -512,9 +503,6 @@ TEST_P(SparseReadTest, RecoveryAfterTruncate) {
 
 // Test recovery after zero operation
 TEST_P(SparseReadTest, RecoveryAfterZero) {
-  if (GetParam() == PoolType::FAST_EC) {
-    GTEST_SKIP() << "Skipping Recovery test on FastEC (currently hanging)";
-  }
   turn_balancing_off();
 
   std::string oid = "recovery_zero_op";
@@ -826,9 +814,6 @@ TEST_P(SparseReadTest, SequentialWrites) {
 
 // Test recovery after WRITEFULL operation
 TEST_P(SparseReadTest, RecoveryAfterWritefull) {
-  if (GetParam() == PoolType::FAST_EC) {
-    GTEST_SKIP() << "Skipping Recovery test on FastEC (currently hanging)";
-  }
   turn_balancing_off();
 
   std::string oid = "recovery_writefull";
