@@ -141,13 +141,23 @@ class PoolTypeTestFixture : public ::testing::TestWithParam<PoolType> {
   bool balancing_disabled = false;
 };
 
-// Base class for EC-only tests
+// Base class for EC-only tests.
+// The EC pool is created once per test suite (SetUpTestSuite / TearDownTestSuite).
+// Per-test isolation is achieved via per-test namespaces, matching the pattern
+// used by PoolTypeTestFixture.
 class ECOnlyTestFixture : public ::testing::Test {
  protected:
   static librados::Rados rados;
+  static std::string pool_name;
   librados::IoCtx ioctx;
-  std::string pool_name;
+  std::string nspace;
 
+  static void cleanup_namespace(librados::Rados& cluster,
+                                librados::IoCtx& ioctx,
+                                const std::string& ns);
+
+  static void SetUpTestSuite();
+  static void TearDownTestSuite();
   void SetUp() override;
   void TearDown() override;
 };
