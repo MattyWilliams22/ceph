@@ -17,16 +17,91 @@
 
 using namespace std;
 using namespace librados;
+using ceph::test::ECOnlyTestFixture;
 using ceph::test::PoolType;
 using ceph::test::PoolTypeTestFixture;
+
+// ---------------------------------------------------------------------------
+// Mixin providing helper methods used by both SparseReadTest and
+// ECSparseReadTest.  Concrete fixture subclasses must implement get_ioctx()
+// to return their IoCtx — this avoids any ambiguous member lookup when the
+// mixin is combined with a fixture base that also owns an ioctx field.
+// ---------------------------------------------------------------------------
+class SparseReadHelpers {
+protected:
+  // Provided by each concrete fixture.
+  virtual librados::IoCtx& get_ioctx() = 0;
+
+  // Helper to create buffer with specific pattern
+  bufferlist create_pattern_buffer(size_t size, char pattern) {
+    bufferlist bl;
+    bl.append(std::string(size, pattern));
+    return bl;
+  }
+
+  // Helper to create zero buffer
+  bufferlist create_zero_buffer(size_t size) {
+    bufferlist bl;
+    bl.append(std::string(size, '\0'));
+    return bl;
+  }
+
+  // Helper to verify sparse read results
+  void verify_sparse_read(
+      const std::string& oid,
+      uint64_t offset,
+      uint64_t length,
+      const std::map<uint64_t, uint64_t>& expected_extents,
+      const bufferlist& expected_data) {
+    std::map<uint64_t, uint64_t> extents;
+    bufferlist read_bl;
+    int ret = get_ioctx().sparse_read(oid, extents, read_bl, length, offset);
+    ASSERT_EQ(ret, (int)expected_extents.size());
+    ASSERT_EQ(extents, expected_extents);
+    ASSERT_EQ(read_bl.length(), expected_data.length());
+    ASSERT_TRUE(read_bl.contents_equal(expected_data));
+  }
+
+  // Helper to verify mapext results
+  void verify_mapext(
+      const std::string& oid,
+      uint64_t offset,
+      uint64_t length,
+      const std::map<uint64_t, uint64_t>& expected_extents) {
+    std::map<uint64_t, uint64_t> extents;
+    int ret = get_ioctx().mapext(oid, offset, length, extents);
+    ASSERT_EQ(ret, (int)expected_extents.size());
+    ASSERT_EQ(extents, expected_extents);
+  }
+
+  std::optional<force_allocated_extents_t> get_force_allocated_extents(
+      const std::string& oid) {
+    bufferlist bl;
+    static_assert(OI_ATTR[0] == '_', "OI_ATTR must start with '_'");
+    int ret = get_ioctx().getxattr(oid, &OI_ATTR[1], bl);
+    if (ret < 0) {
+      ADD_FAILURE() << "getxattr OI failed: " << ret;
+      return std::nullopt;
+    }
+    object_info_t oi(bl);
+    if (oi.force_allocated_extents.empty()) {
+      return std::nullopt;
+    }
+    return oi.force_allocated_extents;
+  }
+
+  virtual ~SparseReadHelpers() = default;
+};
 
 /**
  * Test fixture for sparse read operations on EC and Replicated pools.
  * Tests sparse_read, write, truncate, zero, mapext operations and
  * verifies behavior during recovery scenarios.
  */
-class SparseReadTest : public PoolTypeTestFixture {
+class SparseReadTest : public PoolTypeTestFixture, public SparseReadHelpers {
 protected:
+  librados::IoCtx& get_ioctx() override { return ioctx; }
+
   static std::string pool_name_prefix() {
     return "sparse_read_test_";
   }
@@ -56,65 +131,26 @@ protected:
     }
     PoolTypeTestFixture::TearDown();
   }
+};
 
-  // Helper to create buffer with specific pattern
-  bufferlist create_pattern_buffer(size_t size, char pattern) {
-    bufferlist bl;
-    std::string data(size, pattern);
-    bl.append(data);
-    return bl;
+/**
+ * Test fixture for EC-only sparse read tests (FAE tracking).
+ * Uses a single EC pool shared across the suite (created by ECOnlyTestFixture's
+ * SetUpTestSuite / TearDownTestSuite).  Per-test isolation is via namespaces.
+ * Helpers are inherited from SparseReadHelpers.
+ */
+class ECSparseReadTest : public ECOnlyTestFixture, public SparseReadHelpers {
+protected:
+  librados::IoCtx& get_ioctx() override { return ioctx; }
+
+  void SetUp() override {
+    SKIP_IF_CRIMSON();
+    ECOnlyTestFixture::SetUp();
   }
 
-  // Helper to create zero buffer
-  bufferlist create_zero_buffer(size_t size) {
-    bufferlist bl;
-    std::string data(size, '\0');
-    bl.append(data);
-    return bl;
-  }
-
-  // Helper to verify sparse read results
-  void verify_sparse_read(
-      const std::string& oid,
-      uint64_t offset,
-      uint64_t length,
-      const std::map<uint64_t, uint64_t>& expected_extents,
-      const bufferlist& expected_data) {
-    std::map<uint64_t, uint64_t> extents;
-    bufferlist read_bl;
-    int ret = ioctx.sparse_read(oid, extents, read_bl, length, offset);
-    ASSERT_EQ(ret, (int)expected_extents.size());
-    ASSERT_EQ(extents, expected_extents);
-    ASSERT_EQ(read_bl.length(), expected_data.length());
-    ASSERT_TRUE(read_bl.contents_equal(expected_data));
-  }
-
-  // Helper to verify mapext results
-  void verify_mapext(
-      const std::string& oid,
-      uint64_t offset,
-      uint64_t length,
-      const std::map<uint64_t, uint64_t>& expected_extents) {
-    std::map<uint64_t, uint64_t> extents;
-    int ret = ioctx.mapext(oid, offset, length, extents);
-    ASSERT_EQ(ret, (int)expected_extents.size());
-    ASSERT_EQ(extents, expected_extents);
-  }
-
-  std::optional<force_allocated_extents_t> get_force_allocated_extents(
-      const std::string& oid) {
-    bufferlist bl;
-    static_assert(OI_ATTR[0] == '_', "OI_ATTR must start with '_'");
-    int ret = ioctx.getxattr(oid, &OI_ATTR[1], bl);
-    if (ret < 0) {
-      ADD_FAILURE() << "getxattr OI failed: " << ret;
-      return std::nullopt;
-    }
-    object_info_t oi(bl);
-    if (oi.force_allocated_extents.empty()) {
-      return std::nullopt;
-    }
-    return oi.force_allocated_extents;
+  void TearDown() override {
+    SKIP_IF_CRIMSON();
+    ECOnlyTestFixture::TearDown();
   }
 };
 
@@ -182,11 +218,7 @@ TEST_P(SparseReadTest, WriteOperation) {
   ASSERT_TRUE(read_bl.contents_equal(write_bl));
 }
 
-TEST_P(SparseReadTest, WriteTracksAllZeroExtentOnFastEC) {
-  if (GetParam() != PoolType::FAST_EC) {
-    GTEST_SKIP() << "force-allocated extent tracking is only enabled for FastEC in this suite";
-  }
-
+TEST_F(ECSparseReadTest, WriteTracksAllZeroExtentOnFastEC) {
   std::string oid = "write_tracks_zero_extent";
   bufferlist zero_bl = create_zero_buffer(4096);
   ASSERT_EQ(0, ioctx.write(oid, zero_bl, zero_bl.length(), 0));
@@ -199,11 +231,7 @@ TEST_P(SparseReadTest, WriteTracksAllZeroExtentOnFastEC) {
   ASSERT_EQ(expected, fae->get_intervals());
 }
 
-TEST_P(SparseReadTest, WriteDoesNotTrackExtentWhenOnlyPrefixIsZero) {
-  if (GetParam() != PoolType::FAST_EC) {
-    GTEST_SKIP() << "force-allocated extent tracking is only enabled for FastEC in this suite";
-  }
-
+TEST_F(ECSparseReadTest, WriteDoesNotTrackExtentWhenOnlyPrefixIsZero) {
   std::string oid = "write_prefix_zero_only";
   bufferlist write_bl;
   std::string data(4096, '\0');
@@ -214,11 +242,7 @@ TEST_P(SparseReadTest, WriteDoesNotTrackExtentWhenOnlyPrefixIsZero) {
   ASSERT_FALSE(get_force_allocated_extents(oid).has_value());
 }
 
-TEST_P(SparseReadTest, WriteTracksOnlyFullyCoveredZeroBlocks) {
-  if (GetParam() != PoolType::FAST_EC) {
-    GTEST_SKIP() << "force-allocated extent tracking is only enabled for FastEC in this suite";
-  }
-
+TEST_F(ECSparseReadTest, WriteTracksOnlyFullyCoveredZeroBlocks) {
   std::string oid = "write_tracks_full_zero_blocks_only";
   bufferlist zero_bl = create_zero_buffer(8192);
   ASSERT_EQ(0, ioctx.write(oid, zero_bl, zero_bl.length(), 4096));
@@ -231,11 +255,7 @@ TEST_P(SparseReadTest, WriteTracksOnlyFullyCoveredZeroBlocks) {
   ASSERT_EQ(expected, fae->get_intervals());
 }
 
-TEST_P(SparseReadTest, WriteSkipsPartialLeadingBlock) {
-  if (GetParam() != PoolType::FAST_EC) {
-    GTEST_SKIP() << "force-allocated extent tracking is only enabled for FastEC in this suite";
-  }
-
+TEST_F(ECSparseReadTest, WriteSkipsPartialLeadingBlock) {
   std::string oid = "write_skips_partial_leading_block";
   bufferlist zero_bl = create_zero_buffer(4096);
   ASSERT_EQ(0, ioctx.write(oid, zero_bl, zero_bl.length(), 2048));
@@ -243,11 +263,7 @@ TEST_P(SparseReadTest, WriteSkipsPartialLeadingBlock) {
   ASSERT_FALSE(get_force_allocated_extents(oid).has_value());
 }
 
-TEST_P(SparseReadTest, WriteClearsTrackedExtentWithNonZeroOverwrite) {
-  if (GetParam() != PoolType::FAST_EC) {
-    GTEST_SKIP() << "force-allocated extent tracking is only enabled for FastEC in this suite";
-  }
-
+TEST_F(ECSparseReadTest, WriteClearsTrackedExtentWithNonZeroOverwrite) {
   std::string oid = "write_clears_tracked_extent";
   bufferlist zero_bl = create_zero_buffer(4096);
   ASSERT_EQ(0, ioctx.write(oid, zero_bl, zero_bl.length(), 0));
@@ -850,11 +866,7 @@ TEST_P(SparseReadTest, RecoveryAfterWritefull) {
 // --- 8.4 WRITEFULL ---
 
 // WRITEFULL with non-zero data must clear any existing FAE entries.
-TEST_P(SparseReadTest, WritefullClearsFAE) {
-  if (GetParam() != PoolType::FAST_EC) {
-    GTEST_SKIP() << "FAE tracking only on FastEC";
-  }
-
+TEST_F(ECSparseReadTest, WritefullClearsFAE) {
   std::string oid = "writefull_clears_fae";
 
   // Write zeros so FAE is populated.
@@ -870,11 +882,7 @@ TEST_P(SparseReadTest, WritefullClearsFAE) {
 }
 
 // WRITEFULL with zero data must set FAE to cover the written range.
-TEST_P(SparseReadTest, WritefullZeroDataSetsFAE) {
-  if (GetParam() != PoolType::FAST_EC) {
-    GTEST_SKIP() << "FAE tracking only on FastEC";
-  }
-
+TEST_F(ECSparseReadTest, WritefullZeroDataSetsFAE) {
   std::string oid = "writefull_zero_sets_fae";
 
   bufferlist zero_bl = create_zero_buffer(8192);
@@ -889,11 +897,7 @@ TEST_P(SparseReadTest, WritefullZeroDataSetsFAE) {
 }
 
 // WRITEFULL replaces a larger object: previous FAE beyond new size is gone.
-TEST_P(SparseReadTest, WritefullSmallerObjectClearsPriorFAE) {
-  if (GetParam() != PoolType::FAST_EC) {
-    GTEST_SKIP() << "FAE tracking only on FastEC";
-  }
-
+TEST_F(ECSparseReadTest, WritefullSmallerObjectClearsPriorFAE) {
   std::string oid = "writefull_smaller_clears_fae";
 
   // Write zeros at offset 8192 to set FAE there.
@@ -912,11 +916,7 @@ TEST_P(SparseReadTest, WritefullSmallerObjectClearsPriorFAE) {
 // --- 8.5 WRITESAME ---
 
 // WRITESAME with an all-zero pattern must track the written range as FAE.
-TEST_P(SparseReadTest, WritesameZeroPatternTracksFAE) {
-  if (GetParam() != PoolType::FAST_EC) {
-    GTEST_SKIP() << "FAE tracking only on FastEC";
-  }
-
+TEST_F(ECSparseReadTest, WritesameZeroPatternTracksFAE) {
   std::string oid = "writesame_zero_fae";
 
   // Write 16 KiB of zeros via WRITESAME (pattern = one 4 KiB zero block).
@@ -932,11 +932,7 @@ TEST_P(SparseReadTest, WritesameZeroPatternTracksFAE) {
 }
 
 // WRITESAME with a non-zero pattern must not set FAE.
-TEST_P(SparseReadTest, WritesameNonZeroPatternNoFAE) {
-  if (GetParam() != PoolType::FAST_EC) {
-    GTEST_SKIP() << "FAE tracking only on FastEC";
-  }
-
+TEST_F(ECSparseReadTest, WritesameNonZeroPatternNoFAE) {
   std::string oid = "writesame_nonzero_no_fae";
 
   bufferlist pattern = create_pattern_buffer(4096, 'C');
@@ -948,11 +944,7 @@ TEST_P(SparseReadTest, WritesameNonZeroPatternNoFAE) {
 // --- 8.6 TRUNCATE / TRIMTRUNC ---
 
 // TRUNCATE must remove FAE entries that lie entirely beyond the new size.
-TEST_P(SparseReadTest, TruncateRemovesFAEBeyondNewSize) {
-  if (GetParam() != PoolType::FAST_EC) {
-    GTEST_SKIP() << "FAE tracking only on FastEC";
-  }
-
+TEST_F(ECSparseReadTest, TruncateRemovesFAEBeyondNewSize) {
   std::string oid = "truncate_removes_fae";
 
   // Write zeros at block 0 (offset 0) and block 2 (offset 8192).
@@ -982,11 +974,7 @@ TEST_P(SparseReadTest, TruncateRemovesFAEBeyondNewSize) {
 }
 
 // TRUNCATE to zero size clears all FAE entries.
-TEST_P(SparseReadTest, TruncateToZeroClearsFAE) {
-  if (GetParam() != PoolType::FAST_EC) {
-    GTEST_SKIP() << "FAE tracking only on FastEC";
-  }
-
+TEST_F(ECSparseReadTest, TruncateToZeroClearsFAE) {
   std::string oid = "truncate_zero_clears_fae";
 
   bufferlist zero_bl = create_zero_buffer(8192);
@@ -999,11 +987,7 @@ TEST_P(SparseReadTest, TruncateToZeroClearsFAE) {
 }
 
 // TRUNCATE to a larger size (extend) must not change existing FAE entries.
-TEST_P(SparseReadTest, TruncateExtendPreservesFAE) {
-  if (GetParam() != PoolType::FAST_EC) {
-    GTEST_SKIP() << "FAE tracking only on FastEC";
-  }
-
+TEST_F(ECSparseReadTest, TruncateExtendPreservesFAE) {
   std::string oid = "truncate_extend_preserves_fae";
 
   bufferlist zero_bl = create_zero_buffer(4096);
@@ -1024,11 +1008,7 @@ TEST_P(SparseReadTest, TruncateExtendPreservesFAE) {
 // --- 8.7 ZERO ---
 
 // ZERO on an aligned region must remove existing FAE entries for that region.
-TEST_P(SparseReadTest, ZeroOpRemovesFAEForZeroedRegion) {
-  if (GetParam() != PoolType::FAST_EC) {
-    GTEST_SKIP() << "FAE tracking only on FastEC";
-  }
-
+TEST_F(ECSparseReadTest, ZeroOpRemovesFAEForZeroedRegion) {
   std::string oid = "zero_op_removes_fae";
 
   // Write zeros to create FAE entries at blocks 0 and 1.
@@ -1056,11 +1036,7 @@ TEST_P(SparseReadTest, ZeroOpRemovesFAEForZeroedRegion) {
 }
 
 // ZERO that covers the entire object clears all FAE entries.
-TEST_P(SparseReadTest, ZeroOpClearsAllFAE) {
-  if (GetParam() != PoolType::FAST_EC) {
-    GTEST_SKIP() << "FAE tracking only on FastEC";
-  }
-
+TEST_F(ECSparseReadTest, ZeroOpClearsAllFAE) {
   std::string oid = "zero_op_clears_all_fae";
 
   bufferlist zero_bl = create_zero_buffer(8192);
@@ -1075,11 +1051,7 @@ TEST_P(SparseReadTest, ZeroOpClearsAllFAE) {
 }
 
 // ZERO does not affect FAE entries outside the zeroed range.
-TEST_P(SparseReadTest, ZeroOpPreservesFAEOutsideRange) {
-  if (GetParam() != PoolType::FAST_EC) {
-    GTEST_SKIP() << "FAE tracking only on FastEC";
-  }
-
+TEST_F(ECSparseReadTest, ZeroOpPreservesFAEOutsideRange) {
   std::string oid = "zero_op_preserves_outside_fae";
 
   // Write zeros to create FAE entries at blocks 0, 1, 2.
@@ -1103,11 +1075,7 @@ TEST_P(SparseReadTest, ZeroOpPreservesFAEOutsideRange) {
 // ZERO with both an unaligned start and unaligned end: the partial leading
 // and trailing blocks are written with literal zeros (not deallocated) so
 // their FAE entries are preserved; only the interior full block is removed.
-TEST_P(SparseReadTest, ZeroOpMisalignedBothEndsPreservesEdgeFAE) {
-  if (GetParam() != PoolType::FAST_EC) {
-    GTEST_SKIP() << "FAE tracking only on FastEC";
-  }
-
+TEST_F(ECSparseReadTest, ZeroOpMisalignedBothEndsPreservesEdgeFAE) {
   std::string oid = "zero_misaligned_start_fae";
 
   // Write zeros across three 4K blocks so all three are FAE-tracked.
@@ -1140,11 +1108,7 @@ TEST_P(SparseReadTest, ZeroOpMisalignedBothEndsPreservesEdgeFAE) {
 
 // ZERO with an unaligned end: the partial trailing block is written with
 // literal zeros (not deallocated), so its FAE entry must be preserved.
-TEST_P(SparseReadTest, ZeroOpMisalignedEndPreservesTrailingFAE) {
-  if (GetParam() != PoolType::FAST_EC) {
-    GTEST_SKIP() << "FAE tracking only on FastEC";
-  }
-
+TEST_F(ECSparseReadTest, ZeroOpMisalignedEndPreservesTrailingFAE) {
   std::string oid = "zero_misaligned_end_fae";
 
   // Three FAE-tracked zero blocks.
@@ -1170,11 +1134,7 @@ TEST_P(SparseReadTest, ZeroOpMisalignedEndPreservesTrailingFAE) {
 // ZERO entirely within one 4K block (sub-block range): the whole range is
 // written with literal zeros.  No block is deallocated, so a pre-existing
 // FAE entry for that block must be preserved.
-TEST_P(SparseReadTest, ZeroOpSubBlockPreservesFAE) {
-  if (GetParam() != PoolType::FAST_EC) {
-    GTEST_SKIP() << "FAE tracking only on FastEC";
-  }
-
+TEST_F(ECSparseReadTest, ZeroOpSubBlockPreservesFAE) {
   std::string oid = "zero_subblock_fae";
 
   // Write one zero block so FAE has an entry for block 0.
@@ -1252,21 +1212,9 @@ INSTANTIATE_TEST_SUITE_P(
 );
 
 // ---------------------------------------------------------------------------
-// Tests for the per-request MOSDOp flag CEPH_OSD_FLAG_PRESERVE_ALLOCATION /
-// OPERATION_PRESERVE_ALLOCATION.
-//
-// All tests use a FastEC pool whose pool-level FLAG_PRESERVE_ALLOCATION is
-// explicitly *disabled*, verifying that the per-request flag alone is
-// sufficient to trigger zero-block tracking.
+// Tests for the per-request MOSDOp flag CEPH_OSD_FLAG_PRESERVE_ALLOCATION
 // ---------------------------------------------------------------------------
 
-/**
- * Test fixture for the per-request PRESERVE_ALLOCATION MOSDOp flag.
- *
- * Unlike SparseReadTest, the pool-level FLAG_PRESERVE_ALLOCATION is intentionally
- * left unset.  Each test that needs tracking must pass
- * librados::OPERATION_PRESERVE_ALLOCATION to ioctx.operate().
- */
 class SparseReadFlagTest : public ::testing::Test {
 protected:
   static librados::Rados rados;

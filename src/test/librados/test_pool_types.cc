@@ -4,6 +4,7 @@
 #include "test_pool_types.h"
 #include "common/json/OSDStructures.h"
 #include "include/scope_guard.h"
+#include "osd/osd_types.h"
 
 #include <algorithm>
 #include <chrono>
@@ -21,12 +22,17 @@ namespace test {
 librados::Rados PoolTypeTestFixture::rados;
 std::map<PoolType, std::string> PoolTypeTestFixture::pool_names;
 
-// Define static member for ECOnlyTestFixture
+// Define static members for ECOnlyTestFixture
 librados::Rados ECOnlyTestFixture::rados;
+std::string ECOnlyTestFixture::pool_name;
 
-void PoolTypeTestFixture::cleanup_namespace(librados::Rados& cluster,
-                                            librados::IoCtx& ioctx,
-                                            const std::string& ns) {
+// ---------------------------------------------------------------------------
+// File-scope helper: removes all objects in the given namespace from ioctx.
+// Used by both PoolTypeTestFixture and ECOnlyTestFixture to avoid duplication.
+// ---------------------------------------------------------------------------
+static void do_cleanup_namespace(librados::Rados& cluster,
+                                 librados::IoCtx& ioctx,
+                                 const std::string& ns) {
   ioctx.snap_set_read(librados::SNAP_HEAD);
   ioctx.set_namespace(ns);
 
@@ -54,6 +60,18 @@ void PoolTypeTestFixture::cleanup_namespace(librados::Rados& cluster,
     }
     sleep(1);
   }
+}
+
+void PoolTypeTestFixture::cleanup_namespace(librados::Rados& cluster,
+                                            librados::IoCtx& ioctx,
+                                            const std::string& ns) {
+  do_cleanup_namespace(cluster, ioctx, ns);
+}
+
+void ECOnlyTestFixture::cleanup_namespace(librados::Rados& cluster,
+                                          librados::IoCtx& ioctx,
+                                          const std::string& ns) {
+  do_cleanup_namespace(cluster, ioctx, ns);
 }
 
 void PoolTypeTestFixture::SetUpTestSuite() {
@@ -240,16 +258,38 @@ void PoolTypeTestFixture::setup_and_trigger_recovery(
   EXPECT_EQ(0, res2);
 }
 
-void ECOnlyTestFixture::SetUp() {
+void ECOnlyTestFixture::SetUpTestSuite() {
   ASSERT_EQ("", connect_cluster_pp(rados));
-  pool_name = get_temp_pool_name();
+  pool_name = get_temp_pool_name("ec_only_test_");
   ASSERT_EQ("", create_pool_by_type(pool_name, rados, PoolType::FAST_EC));
+  // Enable zero-block allocation tracking on the shared EC pool so that
+  // FAE-related tests work without needing a per-request flag.
+  ASSERT_EQ("", set_pool_flags_pp(
+    pool_name, rados, pg_pool_t::FLAG_PRESERVE_ALLOCATION, true));
+  rados.wait_for_latest_osdmap();
+}
+
+void ECOnlyTestFixture::TearDownTestSuite() {
+  ASSERT_EQ(0, destroy_pool_by_type(pool_name, rados, PoolType::FAST_EC));
+  rados.shutdown();
+}
+
+void ECOnlyTestFixture::SetUp() {
   ASSERT_EQ(0, rados.ioctx_create(pool_name.c_str(), ioctx));
+
+  auto test_info = ::testing::UnitTest::GetInstance()->current_test_info();
+  nspace = std::string(test_info->name()) + "_" +
+           std::to_string(std::chrono::system_clock::now()
+                            .time_since_epoch().count());
+  ioctx.set_namespace(nspace);
+
+  cleanup_namespace(rados, ioctx, nspace);
 }
 
 void ECOnlyTestFixture::TearDown() {
+  cleanup_namespace(rados, ioctx, "");
+  cleanup_namespace(rados, ioctx, nspace);
   ioctx.close();
-  ASSERT_EQ(0, destroy_pool_by_type(pool_name, rados, PoolType::FAST_EC));
 }
 
 } // namespace test
