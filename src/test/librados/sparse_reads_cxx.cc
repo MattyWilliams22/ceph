@@ -438,7 +438,7 @@ TEST_P(SparseReadTest, LargeObjectSparseRead) {
 }
 
 // Test recovery scenario - write zeros and verify after recovery
-TEST_P(SparseReadTest, RecoveryWithZeros) {
+TEST_P(SparseReadTest, RecoveryWithZerosDoesErrorInject) {
   turn_balancing_off();
 
   std::string oid = "recovery_zeros";
@@ -451,21 +451,20 @@ TEST_P(SparseReadTest, RecoveryWithZeros) {
   int new_primary;
   setup_and_trigger_recovery(oid, new_primary);
 
-  // Verify zeros are still readable after recovery
-  bufferlist read_bl;
-  ObjectReadOperation read_op;
-  read_op.read(0, 8192, &read_bl, nullptr);
-  ASSERT_EQ(0, ioctx.operate(oid, &read_op, nullptr));
-  ASSERT_TRUE(read_bl.contents_equal(zero_bl));
+  // Verify sparsity is preserved: the zero region must still be reported as
+  // an allocated extent (not silently treated as a hole during recovery).
+  std::map<uint64_t, uint64_t> expected_extents = {{0, 8192}};
+  verify_sparse_read(oid, 0, 8192, expected_extents, zero_bl);
 }
 
 // Test recovery scenario - mixed data and verify allocation state
-TEST_P(SparseReadTest, RecoveryMixedData) {
+TEST_P(SparseReadTest, RecoveryMixedDataDoesErrorInject) {
   turn_balancing_off();
 
   std::string oid = "recovery_mixed";
 
-  // Write pattern: data, hole, zeros, data
+  // Write pattern: data at [0,4096), hole at [4096,8192),
+  // zeros at [8192,12288), data at [16384,20480).
   bufferlist data_bl = create_pattern_buffer(4096, 'K');
   bufferlist zero_bl = create_zero_buffer(4096);
 
@@ -473,33 +472,36 @@ TEST_P(SparseReadTest, RecoveryMixedData) {
   ASSERT_EQ(0, ioctx.write(oid, zero_bl, zero_bl.length(), 8192));
   ASSERT_EQ(0, ioctx.write(oid, data_bl, data_bl.length(), 16384));
 
-  // Get initial read state
-  bufferlist read_bl_before;
-  ObjectReadOperation read_before;
-  read_before.read(0, 20480, &read_bl_before, nullptr);
-  ASSERT_EQ(0, ioctx.operate(oid, &read_before, nullptr));
+  // Capture the pre-recovery extent map so we can compare it after recovery.
+  std::map<uint64_t, uint64_t> extents_before;
+  bufferlist sparse_bl_before;
+  int ret_before = ioctx.sparse_read(oid, extents_before, sparse_bl_before,
+                                     20480, 0);
+  ASSERT_GE(ret_before, 0);
 
   // Trigger recovery
   int new_primary;
   setup_and_trigger_recovery(oid, new_primary);
 
-  // Verify read state after recovery
-  bufferlist read_bl_after;
-  ObjectReadOperation read_after;
-  read_after.read(0, 20480, &read_bl_after, nullptr);
-  ASSERT_EQ(0, ioctx.operate(oid, &read_after, nullptr));
+  // Verify the extent map is identical after recovery: recovery must not
+  // collapse allocated-zero blocks into holes or merge separated extents.
+  std::map<uint64_t, uint64_t> extents_after;
+  bufferlist sparse_bl_after;
+  int ret_after = ioctx.sparse_read(oid, extents_after, sparse_bl_after,
+                                    20480, 0);
+  ASSERT_GE(ret_after, 0);
 
-  // Data should be preserved
-  ASSERT_TRUE(read_bl_before.contents_equal(read_bl_after));
+  ASSERT_EQ(extents_before, extents_after);
+  ASSERT_TRUE(sparse_bl_before.contents_equal(sparse_bl_after));
 }
 
 // Test recovery after truncate
-TEST_P(SparseReadTest, RecoveryAfterTruncate) {
+TEST_P(SparseReadTest, RecoveryAfterTruncateDoesErrorInject) {
   turn_balancing_off();
 
   std::string oid = "recovery_truncate";
 
-  // Write and truncate
+  // Write 16 KiB then truncate to 8 KiB.
   bufferlist write_bl = create_pattern_buffer(16384, 'L');
   ASSERT_EQ(0, ioctx.write(oid, write_bl, write_bl.length(), 0));
   ASSERT_EQ(0, ioctx.trunc(oid, 8192));
@@ -515,38 +517,51 @@ TEST_P(SparseReadTest, RecoveryAfterTruncate) {
   stat_op.stat(&size, &mtime, nullptr);
   ASSERT_EQ(0, ioctx.operate(oid, &stat_op, nullptr));
   ASSERT_EQ(size, 8192u);
+
+  // Verify sparse read reflects the truncation: only the surviving [0,8192)
+  // extent must be present; nothing beyond 8192 may appear after recovery.
+  bufferlist expected_data = create_pattern_buffer(8192, 'L');
+  std::map<uint64_t, uint64_t> expected_extents = {{0, 8192}};
+  verify_sparse_read(oid, 0, 16384, expected_extents, expected_data);
 }
 
 // Test recovery after zero operation
-TEST_P(SparseReadTest, RecoveryAfterZero) {
+TEST_P(SparseReadTest, RecoveryAfterZeroDoesErrorInject) {
   turn_balancing_off();
 
   std::string oid = "recovery_zero_op";
 
-  // Write data and zero part of it
+  // Write 12 KiB of 'M', then zero out [4096, 8192).
+  // On EC the ZERO op deallocates that block, leaving two separate extents:
+  // [0,4096) and [8192,12288).  On replicated the zeroed region may remain
+  // allocated; we capture the pre-recovery map and assert it is unchanged.
   bufferlist write_bl = create_pattern_buffer(12288, 'M');
   ASSERT_EQ(0, ioctx.write(oid, write_bl, write_bl.length(), 0));
-  ObjectWriteOperation op;
-  op.zero(4096, 4096);
-  ASSERT_EQ(0, ioctx.operate(oid, &op));
+  ObjectWriteOperation zero_op;
+  zero_op.zero(4096, 4096);
+  ASSERT_EQ(0, ioctx.operate(oid, &zero_op));
 
-  // Get read state before recovery
-  bufferlist read_bl_before;
-  ObjectReadOperation read_before;
-  read_before.read(0, 12288, &read_bl_before, nullptr);
-  ASSERT_EQ(0, ioctx.operate(oid, &read_before, nullptr));
+  // Capture pre-recovery sparse state (extent map + data).
+  std::map<uint64_t, uint64_t> extents_before;
+  bufferlist sparse_bl_before;
+  int ret_before = ioctx.sparse_read(oid, extents_before, sparse_bl_before,
+                                     12288, 0);
+  ASSERT_GE(ret_before, 0);
 
   // Trigger recovery
   int new_primary;
   setup_and_trigger_recovery(oid, new_primary);
 
-  // Verify read state after recovery matches pre-recovery state
-  bufferlist read_bl_after;
-  ObjectReadOperation read_after;
-  read_after.read(0, 12288, &read_bl_after, nullptr);
-  ASSERT_EQ(0, ioctx.operate(oid, &read_after, nullptr));
+  // The extent map must be identical after recovery: recovery must not
+  // re-allocate the zeroed hole or drop any surviving extents.
+  std::map<uint64_t, uint64_t> extents_after;
+  bufferlist sparse_bl_after;
+  int ret_after = ioctx.sparse_read(oid, extents_after, sparse_bl_after,
+                                    12288, 0);
+  ASSERT_GE(ret_after, 0);
 
-  ASSERT_TRUE(read_bl_before.contents_equal(read_bl_after));
+  ASSERT_EQ(extents_before, extents_after);
+  ASSERT_TRUE(sparse_bl_before.contents_equal(sparse_bl_after));
 }
 // Test two-stage zero detection: first byte zero, rest non-zero
 TEST_P(SparseReadTest, ZeroDetectionFirstByteOnly) {
@@ -829,16 +844,15 @@ TEST_P(SparseReadTest, SequentialWrites) {
 }
 
 // Test recovery after WRITEFULL operation
-TEST_P(SparseReadTest, RecoveryAfterWritefull) {
+TEST_P(SparseReadTest, RecoveryAfterWritefullDoesErrorInject) {
   turn_balancing_off();
 
   std::string oid = "recovery_writefull";
 
-  // Initial write
+  // Initial write of 8 KiB, then WRITEFULL with 4 KiB — the object shrinks.
   bufferlist write_bl1 = create_pattern_buffer(8192, 'R');
   ASSERT_EQ(0, ioctx.write(oid, write_bl1, write_bl1.length(), 0));
 
-  // WRITEFULL
   bufferlist write_bl2 = create_pattern_buffer(4096, 'S');
   bufferlist write_bl2_copy = write_bl2;  // write_full clears the source bufferlist
   ASSERT_EQ(0, ioctx.write_full(oid, write_bl2));
@@ -847,7 +861,7 @@ TEST_P(SparseReadTest, RecoveryAfterWritefull) {
   int new_primary;
   setup_and_trigger_recovery(oid, new_primary);
 
-  // Verify size and content after recovery
+  // Verify size is preserved after recovery.
   uint64_t size = 0;
   time_t mtime = 0;
   ObjectReadOperation stat_op;
@@ -855,11 +869,11 @@ TEST_P(SparseReadTest, RecoveryAfterWritefull) {
   ASSERT_EQ(0, ioctx.operate(oid, &stat_op, nullptr));
   ASSERT_EQ(size, 4096u);
 
-  bufferlist read_bl;
-  ObjectReadOperation read_op;
-  read_op.read(0, 4096, &read_bl, nullptr);
-  ASSERT_EQ(0, ioctx.operate(oid, &read_op, nullptr));
-  ASSERT_TRUE(read_bl.contents_equal(write_bl2_copy));
+  // Verify sparsity: exactly one contiguous extent [0, 4096) must be present;
+  // the upper 4 KiB that existed before WRITEFULL must not reappear after
+  // recovery.
+  std::map<uint64_t, uint64_t> expected_extents = {{0, 4096}};
+  verify_sparse_read(oid, 0, 8192, expected_extents, write_bl2_copy);
 }
 
 
