@@ -59,6 +59,18 @@ std::ostream& ceph::io_exerciser::operator<<(std::ostream& os,
     case Sequence::SEQUENCE_SEQ15:
       os << "SEQUENCE_SEQ15";
       break;
+    case Sequence::SEQUENCE_SEQ16:
+      os << "SEQUENCE_SEQ16";
+      break;
+    case Sequence::SEQUENCE_SEQ17:
+      os << "SEQUENCE_SEQ17";
+      break;
+    case Sequence::SEQUENCE_SEQ18:
+      os << "SEQUENCE_SEQ18";
+      break;
+    case Sequence::SEQUENCE_SEQ19:
+      os << "SEQUENCE_SEQ19";
+      break;
     case Sequence::SEQUENCE_END:
       os << "SEQUENCE_END";
       break;
@@ -108,6 +120,14 @@ std::unique_ptr<IoSequence> IoSequence::generate_sequence(
       return std::make_unique<Seq14>(obj_size_range, seed, check_consistency);
     case Sequence::SEQUENCE_SEQ15:
       return std::make_unique<Seq15>(obj_size_range, seed, check_consistency);
+    case Sequence::SEQUENCE_SEQ16:
+      return std::make_unique<Seq16>(obj_size_range, seed, check_consistency);
+    case Sequence::SEQUENCE_SEQ17:
+      return std::make_unique<Seq17>(obj_size_range, seed, check_consistency);
+    case Sequence::SEQUENCE_SEQ18:
+      return std::make_unique<Seq18>(obj_size_range, seed, check_consistency);
+    case Sequence::SEQUENCE_SEQ19:
+      return std::make_unique<Seq19>(obj_size_range, seed, check_consistency);
     default:
       break;
   }
@@ -859,4 +879,273 @@ std::unique_ptr<ceph::io_exerciser::IoOp> ceph::io_exerciser::Seq15::_next() {
   }
 
   return r;
+}
+
+ceph::io_exerciser::Seq16::Seq16(std::pair<int, int> obj_size_range, int seed,
+                                  bool check_consistency)
+    : IoSequence(obj_size_range, seed, check_consistency),
+      offset1(0),
+      offset2(0) {
+  set_min_object_size(2);
+  select_random_object_size();
+}
+
+Sequence ceph::io_exerciser::Seq16::get_id() const {
+  return Sequence::SEQUENCE_SEQ16;
+}
+
+std::string ceph::io_exerciser::Seq16::get_name() const {
+  return "Permutations of write+zero compound op (WriteAndZero)";
+}
+
+std::unique_ptr<ceph::io_exerciser::IoOp> ceph::io_exerciser::Seq16::_next() {
+  // Phase: post-op barrier + read
+  if (!doneread) {
+    if (!donebarrier) {
+      donebarrier = true;
+      consistency = check_consistency;
+      return BarrierOp::generate();
+    }
+    doneread = true;
+    if (current_size > 0) {
+      barrier = true;
+      return SingleReadOp::generate(0, current_size);
+    }
+  }
+
+  // Phase: post-read remove/re-create for next op
+  if (!donerecreate) {
+    donerecreate = true;
+    create = true;
+    remove = true;
+    barrier = true;
+    return BarrierOp::generate();
+  }
+
+  // Phase: advance to the next (offset1, offset2) pair and emit the op
+  offset2++;
+  if (offset2 >= obj_size - offset1) {
+    offset2 = 1;
+    offset1++;
+    if (offset1 + 1 >= obj_size) {
+      done = true;
+      barrier = true;
+      remove = true;
+      return BarrierOp::generate();
+    }
+  }
+
+  uint64_t zero_offset = offset1 + offset2;
+  current_size = (zero_offset + 1 >= obj_size) ? zero_offset : obj_size;
+
+  doneread = false;
+  donebarrier = false;
+  donerecreate = false;
+  return WriteAndZeroOp::generate(offset1, 1, zero_offset, 1);
+}
+
+ceph::io_exerciser::Seq17::Seq17(std::pair<int, int> obj_size_range, int seed,
+                                  bool check_consistency)
+    : IoSequence(obj_size_range, seed, check_consistency),
+      offset(0),
+      length(1) {
+  set_min_object_size(2);
+  select_random_object_size();
+}
+
+Sequence ceph::io_exerciser::Seq17::get_id() const {
+  return Sequence::SEQUENCE_SEQ17;
+}
+
+std::string ceph::io_exerciser::Seq17::get_name() const {
+  return "Permutations of offset and length zero I/O (misaligned ZERO)";
+}
+
+std::unique_ptr<ceph::io_exerciser::IoOp> ceph::io_exerciser::Seq17::_next() {
+  // Phase: post-op barrier + read
+  if (!doneread) {
+    if (!donebarrier) {
+      donebarrier = true;
+      consistency = check_consistency;
+      return BarrierOp::generate();
+    }
+    doneread = true;
+    if (current_size > 0) {
+      return SingleReadOp::generate(0, current_size);
+    }
+  }
+
+  // Phase: post-read barrier + remove/re-create for next op.
+  if (!donerecreate) {
+    donerecreate = true;
+    create = true;
+    remove = true;
+    barrier = true;
+    return BarrierOp::generate();
+  }
+
+  // Phase: advance to the next (offset, length) pair.
+  length++;
+  if (length > obj_size - offset) {
+    length = 1;
+    offset++;
+    if (offset >= obj_size) {
+      done = true;
+      barrier = true;
+      remove = true;
+      return BarrierOp::generate();
+    }
+  }
+
+  current_size = (offset + length >= obj_size) ? offset : obj_size;
+  doneread = false;
+  donebarrier = false;
+  donerecreate = false;
+  return ZeroOp::generate(offset, length);
+}
+
+ceph::io_exerciser::Seq18::Seq18(std::pair<int, int> obj_size_range, int seed,
+                                  bool check_consistency)
+    : IoSequence(obj_size_range, seed, check_consistency),
+      offset1(0),
+      length1(1),
+      offset2(1),
+      length2(1) {
+  set_min_object_size(2);
+  select_random_object_size();
+}
+
+Sequence ceph::io_exerciser::Seq18::get_id() const {
+  return Sequence::SEQUENCE_SEQ18;
+}
+
+std::string ceph::io_exerciser::Seq18::get_name() const {
+  return "Permutations of offset and length 2-region double-zero compound op (DoubleZero)";
+}
+
+std::unique_ptr<ceph::io_exerciser::IoOp> ceph::io_exerciser::Seq18::_next() {
+  // Phase: post-op barrier + read
+  if (!doneread) {
+    if (!donebarrier) {
+      donebarrier = true;
+      consistency = check_consistency;
+      return BarrierOp::generate();
+    }
+    doneread = true;
+    if (current_size > 0) {
+      return SingleReadOp::generate(0, current_size);
+    }
+  }
+
+  // Phase: post-read remove/re-create for next op.
+  if (!donerecreate) {
+    donerecreate = true;
+    create = true;
+    remove = true;
+    barrier = true;
+    return BarrierOp::generate();
+  }
+
+  // Phase: advance to the next combination.
+  length2++;
+  if (length2 > obj_size - (offset1 + offset2)) {
+    length2 = 1;
+    length1++;
+    if (length1 > offset2) {
+      length1 = 1;
+      offset2++;
+      if (offset1 + offset2 + 1 > obj_size) {
+        offset2 = 1;
+        length1 = 1;
+        offset1++;
+        if (offset1 + 2 > obj_size) {
+          done = true;
+          barrier = true;
+          remove = true;
+          return BarrierOp::generate();
+        }
+      }
+    }
+  }
+
+  uint64_t abs_off2 = offset1 + offset2;
+  uint64_t size_after_zero1 =
+      (offset1 + length1 >= obj_size) ? offset1 : obj_size;
+  if (abs_off2 >= size_after_zero1) {
+    current_size = size_after_zero1;
+  } else if (abs_off2 + length2 >= size_after_zero1) {
+    current_size = abs_off2;
+  } else {
+    current_size = size_after_zero1;
+  }
+
+  doneread = false;
+  donebarrier = false;
+  donerecreate = false;
+  return DoubleZeroOp::generate(offset1, length1, abs_off2, length2);
+}
+
+ceph::io_exerciser::Seq19::Seq19(std::pair<int, int> obj_size_range, int seed,
+                                  bool check_consistency)
+    : IoSequence(obj_size_range, seed, check_consistency),
+      zero_offset(0),
+      zero_length(1),
+      truncate_size(0) {
+  set_min_object_size(2);
+  select_random_object_size();
+}
+
+Sequence ceph::io_exerciser::Seq19::get_id() const {
+  return Sequence::SEQUENCE_SEQ19;
+}
+
+std::string ceph::io_exerciser::Seq19::get_name() const {
+  return "Permutations of zero+truncate compound op (ZeroAndTruncate)";
+}
+
+std::unique_ptr<ceph::io_exerciser::IoOp> ceph::io_exerciser::Seq19::_next() {
+  // Phase: post-op barrier + read
+  if (!doneread) {
+    if (!donebarrier) {
+      donebarrier = true;
+      consistency = check_consistency;
+      return BarrierOp::generate();
+    }
+    doneread = true;
+    if (truncate_size > 0) {
+      barrier = true;
+      return SingleReadOp::generate(0, truncate_size);
+    }
+  }
+
+  // Phase: post-read remove/re-create for next op
+  if (!donerecreate) {
+    donerecreate = true;
+    create = true;
+    remove = true;
+    barrier = true;
+    return BarrierOp::generate();
+  }
+
+  // Phase: advance to the next (zero_offset, zero_length, truncate_size) triple
+  truncate_size++;
+  if (truncate_size > obj_size) {
+    truncate_size = 0;
+    zero_length++;
+    if (zero_length > obj_size - zero_offset) {
+      zero_length = 1;
+      zero_offset++;
+      if (zero_offset >= obj_size) {
+        done = true;
+        barrier = true;
+        remove = true;
+        return BarrierOp::generate();
+      }
+    }
+  }
+
+  doneread = false;
+  donebarrier = false;
+  donerecreate = false;
+  return ZeroAndTruncateOp::generate(zero_offset, zero_length, truncate_size);
 }
