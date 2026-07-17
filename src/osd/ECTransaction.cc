@@ -784,7 +784,7 @@ ECTransaction::Generate::Generate(PGTransaction &t,
   debug(oid, "to_write", to_write, dpp);
   ldpp_dout(dpp, 20) << " generate_transactions: plan: " << plan << dendl;
 
-  if (op.truncate && op.truncate->first < plan.orig_size) {
+  if (op.truncate && op.truncate->first < plan.orig_size && !op.is_fresh_object()) {
     truncate();
   }
 
