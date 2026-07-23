@@ -526,6 +526,11 @@ void ECBackend::handle_sub_read(
     if (op.want_sparse_read.count(hoid)) {
       // sparse read path: fiemap then (optionally) readv
       for (auto &&[offset, len, flags]: to_read) {
+        dout(20) << __func__ << ": sparse fiemap hoid=" << hoid
+                 << " shard=" << shard
+                 << " shard_range=[" << offset << "~" << len << "]"
+                 << " (bug: fiemap restricted to partial shard range,"
+                 << " not full object extent)" << dendl;
         std::map<uint64_t, uint64_t> shard_map;
         r = switcher->store->fiemap(
           switcher->ch,
@@ -544,6 +549,9 @@ void ECBackend::handle_sub_read(
           }
           goto error;
         }
+        dout(20) << __func__ << ": sparse fiemap result hoid=" << hoid
+                 << " shard=" << shard
+                 << " shard_extents=" << shard_map << dendl;
         for (auto &&[ext_off, ext_len]: shard_map) {
           reply->sparse_extents_read[hoid][ext_off] = ext_len;
         }
@@ -1614,11 +1622,50 @@ struct SparseReadCompleter final : ECCommon::ReadCompleter {
       const hobject_t &hoid,
       ECCommon::read_result_t &&res,
       ECCommon::read_request_t &req) override {
+    auto *dpp = read_pipeline.get_parent()->get_dpp();
+    ldpp_dout(dpp, 20) << __func__ << ": hoid=" << hoid
+      << " ro_read=[" << req.to_read.front().offset
+      << "~" << req.to_read.front().size << "]"
+      << " sparse_extents_read (per shard, shard-space)="
+      << res.sparse_extents_read << dendl;
     if (res.r < 0) {
       result = res.r;
       return;
     }
     *out_map = ECUtil::merge_shard_extent_maps(res.sparse_extents_read, sinfo);
+    ldpp_dout(dpp, 20) << __func__ << ": hoid=" << hoid
+      << " merged RO extent map (pre-clip)=" << *out_map << dendl;
+    // Clip the full-object extent map to the requested [offset, length] window.
+    // The fiemap was issued over the full shard extent so merge_shard_extent_maps
+    // may return extents outside [offset, offset+length]; strip those out.
+    {
+      const uint64_t req_offset = req.to_read.front().offset;
+      const uint64_t req_end    = req_offset + req.to_read.front().size;
+      auto it = out_map->begin();
+      while (it != out_map->end()) {
+        const uint64_t ext_end = it->first + it->second;
+        if (ext_end <= req_offset || it->first >= req_end) {
+          // Entirely outside the requested range — drop it.
+          it = out_map->erase(it);
+        } else {
+          // Clip start if needed.
+          if (it->first < req_offset) {
+            const uint64_t new_len = it->second - (req_offset - it->first);
+            it = out_map->emplace_hint(out_map->erase(it),
+                                       req_offset, new_len);
+          }
+          // Clip end if needed.
+          if (it->first + it->second > req_end) {
+            it->second = req_end - it->first;
+          }
+          ++it;
+        }
+      }
+    }
+    ldpp_dout(dpp, 20) << __func__ << ": hoid=" << hoid
+      << " merged+clipped RO extent map=" << *out_map
+      << " for ro_read=[" << req.to_read.front().offset
+      << "~" << req.to_read.front().size << "]" << dendl;
     if (out_map->empty()) {
       return;
     }
@@ -1671,7 +1718,12 @@ struct ECMapextCompleter final : ECCommon::ReadCompleter {
       result = res.r;
       return;
     }
+    lgeneric_subdout(g_ceph_context, osd, 20) << __func__ << ": hoid=" << hoid
+      << " sparse_extents_read (per shard, shard-space)="
+      << res.sparse_extents_read << dendl;
     *out_map = ECUtil::merge_shard_extent_maps(res.sparse_extents_read, sinfo);
+    lgeneric_subdout(g_ceph_context, osd, 20) << __func__ << ": hoid=" << hoid
+      << " merged RO extent map=" << *out_map << dendl;
   }
 
   void finish(int priority) && override {
@@ -1699,9 +1751,21 @@ int ECBackend::objects_sparse_read_async(
     return -EOPNOTSUPP;
   }
 
+  dout(20) << __func__ << ": hoid=" << hoid
+           << " ro_range=[" << offset << "~" << length << "]"
+           << " object_size=" << object_size << dendl;
+
   std::list<ec_align_t> to_read = {{offset, length, op_flags}};
+  // For sparse reads we need each OSD to fiemap its full shard extent so that
+  // merge_shard_extent_maps produces a complete, accurate RO extent map.
+  // Using the partial shard ranges derived from [offset, length] would cause
+  // each shard's fiemap to cover only a sub-range, leaving real data appearing
+  // as holes in the merged map and causing data-corruption false positives.
   ECUtil::shard_extent_set_t want_shard_reads(sinfo.get_k_plus_m());
-  read_pipeline.get_want_to_read_shards(to_read, want_shard_reads);
+  sinfo.ro_size_to_read_mask(object_size, want_shard_reads);
+
+  dout(20) << __func__ << ": want_shard_reads (full object, for fiemap)="
+           << want_shard_reads << dendl;
 
   read_request_t read_request(
     to_read, want_shard_reads,
@@ -1714,6 +1778,9 @@ int ECBackend::objects_sparse_read_async(
   if (r < 0) {
     return r;
   }
+
+  dout(20) << __func__ << ": shard_reads after get_min_avail="
+           << read_request.shard_reads << dendl;
 
   map<hobject_t, read_request_t> for_read_op;
   for_read_op.emplace(hoid, std::move(read_request));

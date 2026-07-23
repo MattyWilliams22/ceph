@@ -1380,6 +1380,9 @@ public:
 
     librados::ObjectWriteOperation op;
     op.zero(offset, length);
+    bufferlist contbl;
+    encode(cont, contbl);
+    op.setxattr("_header", contbl);
     context->io_ctx.aio_operate(context->prefix + oid, comp, &op);
   }
 
