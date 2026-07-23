@@ -149,7 +149,7 @@ bool ObjectDesc::check_sparse(const std::map<uint64_t, uint64_t>& extents,
 			      bufferlist &to_check,
 			      const std::pair<uint64_t, uint64_t>& offlen)
 {
-  const auto [offset_to_skip, _] = offlen;
+  const auto [offset_to_skip, read_length] = offlen;
   uint64_t pos = offset_to_skip;
   uint64_t off = 0;
   auto objiter = begin();
@@ -192,15 +192,17 @@ bool ObjectDesc::check_sparse(const std::map<uint64_t, uint64_t>& extents,
     }
   }
 
-  // final hole
+  // final hole: validate from end of last returned extent to end of requested range
   bufferlist bl;
-  uint64_t size = layers.begin()->first->get_length(layers.begin()->second);
-  bl.append_zero(size - pos);
-  uint64_t error_at;
-  if (!objiter.check_bl_advance(bl, &error_at)) {
-    std::cout << "sparse read omitted non-zero data at "
-	      << error_at << std::endl;
-    return false;
+  uint64_t end = offset_to_skip + read_length;
+  if (end > pos) {
+    bl.append_zero(end - pos);
+    uint64_t error_at;
+    if (!objiter.check_bl_advance(bl, &error_at)) {
+      std::cout << "sparse read omitted non-zero data at "
+                << error_at << std::endl;
+      return false;
+    }
   }
   return true;
 }

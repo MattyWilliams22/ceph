@@ -47,6 +47,7 @@ enum TestOpType {
   TEST_OP_WRITE,
   TEST_OP_WRITE_EXCL,
   TEST_OP_WRITESAME,
+  TEST_OP_ZERO,
   TEST_OP_DELETE,
   TEST_OP_SNAP_CREATE,
   TEST_OP_SNAP_REMOVE,
@@ -1320,6 +1321,95 @@ public:
   std::string getType() override
   {
     return "WriteSameOp";
+  }
+};
+
+class ZeroOp : public TestOp {
+public:
+  std::string oid;
+  librados::AioCompletion *comp = nullptr;
+  uint64_t offset = 0;
+  uint64_t length = 0;
+
+  ZeroOp(int n,
+         RadosTestContext *context,
+         const std::string &oid,
+         TestOpStat *stat = 0)
+    : TestOp(n, context, stat), oid(oid)
+  {}
+
+  void _begin() override
+  {
+    std::lock_guard state_locker{context->state_lock};
+
+    ObjectDesc obj;
+    context->find_object(oid, &obj);
+    if (obj.deleted() || !obj.has_contents()) {
+      // nothing to zero on a non-existent object; skip silently
+      done = true;
+      context->kick();
+      return;
+    }
+
+    uint64_t obj_size = obj.most_recent_gen()->get_length(obj.most_recent());
+    if (obj_size == 0) {
+      done = true;
+      context->kick();
+      return;
+    }
+
+    offset = rand() % obj_size;
+    length = (rand() % (obj_size - offset)) + 1;
+
+    std::stringstream acc;
+    acc << context->prefix << "OID: " << oid << " snap " << context->current_snap << std::endl;
+    ContDesc cont(context->seq_num, context->current_snap, context->seq_num, acc.str());
+    context->update_object(new ZeroGenerator(offset, length), oid, cont);
+    context->seq_num++;
+
+    context->oid_in_use.insert(oid);
+    context->oid_not_in_use.erase(oid);
+
+    context->cout_prefix() << num << ":  zero oid " << oid
+      << " [" << offset << ", " << offset + length << ")" << std::endl;
+
+    auto *cb_arg = new std::pair<TestOp*, TestOp::CallbackInfo*>(
+      this, new TestOp::CallbackInfo(0));
+    comp = context->rados.aio_create_completion(
+      (void*) cb_arg, &write_callback);
+
+    librados::ObjectWriteOperation op;
+    op.zero(offset, length);
+    context->io_ctx.aio_operate(context->prefix + oid, comp, &op);
+  }
+
+  void _finish(CallbackInfo *info) override
+  {
+    std::lock_guard state_locker{context->state_lock};
+    ceph_assert(!done);
+    int r = comp->get_return_value();
+    if (r) {
+      std::cerr << "Error: oid " << oid << " zero returned error code "
+                << r << std::endl;
+      ceph_abort();
+    }
+    context->update_object_version(oid, comp->get_version64());
+    comp->release();
+    comp = nullptr;
+    context->oid_in_use.erase(oid);
+    context->oid_not_in_use.insert(oid);
+    context->kick();
+    done = true;
+  }
+
+  bool finished() override
+  {
+    return done;
+  }
+
+  std::string getType() override
+  {
+    return "ZeroOp";
   }
 };
 

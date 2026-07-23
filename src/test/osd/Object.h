@@ -246,6 +246,52 @@ public:
   }
 };
 
+class ZeroGenerator : public ContentsGenerator {
+  uint64_t zero_offset;
+  uint64_t zero_length;
+
+  class iterator_impl : public ContentsGenerator::iterator_impl {
+  public:
+    uint64_t pos;
+    const uint64_t end_pos;
+    explicit iterator_impl(uint64_t offset, uint64_t length)
+      : pos(offset), end_pos(offset + length) {}
+    char operator*() override { return '\0'; }
+    iterator_impl &operator++() override { ++pos; return *this; }
+    void seek(uint64_t _pos) override { pos = _pos; }
+    bool end() override { return pos >= end_pos; }
+    ContDesc get_cont() const override { return ContDesc(); }
+    uint64_t get_pos() const override { return pos; }
+  };
+
+public:
+  ZeroGenerator(uint64_t offset, uint64_t length)
+    : zero_offset(offset), zero_length(length) {}
+
+  uint64_t get_length(const ContDesc &) override {
+    return zero_offset + zero_length;
+  }
+
+  void get_ranges_map(const ContDesc &, std::map<uint64_t, uint64_t> &out) override {
+    out.insert(std::make_pair(zero_offset, zero_length));
+  }
+
+  ContentsGenerator::iterator_impl *get_iterator_impl(const ContDesc &) override {
+    return new iterator_impl(zero_offset, zero_length);
+  }
+
+  ContentsGenerator::iterator_impl *dup_iterator_impl(
+    const ContentsGenerator::iterator_impl *in) override {
+    auto *ret = new iterator_impl(zero_offset, zero_length);
+    ret->seek(in->get_pos());
+    return ret;
+  }
+
+  void put_iterator_impl(ContentsGenerator::iterator_impl *in) override {
+    delete in;
+  }
+};
+
 class AttrGenerator : public RandGenerator {
   uint64_t max_len;
   uint64_t big_max_len;
