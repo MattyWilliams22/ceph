@@ -1633,6 +1633,47 @@ struct SparseReadCompleter final : ECCommon::ReadCompleter {
       result = res.r;
       return;
     }
+    *out_map = ECUtil::merge_shard_extent_maps(res.sparse_extents_read, sinfo);
+    ldpp_dout(dpp, 20) << __func__ << ": hoid=" << hoid
+      << " merged RO extent map (pre-clip)=" << *out_map << dendl;
+    // Clip the full-object extent map to the requested [offset, length] window.
+    // The fiemap was issued over the full shard extent so merge_shard_extent_maps
+    // may return extents outside [offset, offset+length]; strip those out.
+    {
+      const uint64_t req_offset = req.to_read.front().offset;
+      const uint64_t req_end    = req_offset + req.to_read.front().size;
+      auto it = out_map->begin();
+      while (it != out_map->end()) {
+        const uint64_t ext_end = it->first + it->second;
+        if (ext_end <= req_offset || it->first >= req_end) {
+          // Entirely outside the requested range — drop it.
+          it = out_map->erase(it);
+        } else {
+          // Clip start if needed.
+          if (it->first < req_offset) {
+            const uint64_t new_len = it->second - (req_offset - it->first);
+            it = out_map->emplace_hint(out_map->erase(it),
+                                       req_offset, new_len);
+          }
+          // Clip end if needed.
+          if (it->first + it->second > req_end) {
+            it->second = req_end - it->first;
+          }
+          ++it;
+        }
+      }
+    }
+    ldpp_dout(dpp, 20) << __func__ << ": hoid=" << hoid
+      << " merged+clipped RO extent map=" << *out_map
+      << " for ro_read=[" << req.to_read.front().offset
+      << "~" << req.to_read.front().size << "]" << dendl;
+    if (out_map->empty()) {
+      return;
+    }
+    // Zero-fill intra-object holes in the shard data (sparse objects have
+    // unallocated extents within the requested range that are not returned
+    // by fiemap; the EC decode requires a dense stripe, so we must pad them
+    // to zeros before decoding).
     res.buffers_read.zero_pad(req.shard_want_to_read);
     res.buffers_read.add_zero_padding_for_decode(req.zeros_for_decode);
     int r = res.buffers_read.decode(read_pipeline.ec_impl,
@@ -1746,7 +1787,7 @@ struct ECMapextCompleter final : ECCommon::ReadCompleter {
       result = res.r;
       return;
     }
-    ldpp_dout(dpp, 20) << __func__ << ": hoid=" << hoid
+    lgeneric_subdout(g_ceph_context, osd, 20) << __func__ << ": hoid=" << hoid
       << " sparse_extents_read (per shard, shard-space)="
       << res.sparse_extents_read << dendl;
     if (needs_reconstruct) {
