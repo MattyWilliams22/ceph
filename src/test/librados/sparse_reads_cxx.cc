@@ -439,6 +439,9 @@ TEST_P(SparseReadTest, LargeObjectSparseRead) {
 
 // Test recovery scenario - write zeros and verify after recovery
 TEST_P(SparseReadTest, RecoveryWithZerosDoesErrorInject) {
+  if (pool_type == PoolType::FAST_EC) {
+    GTEST_SKIP() << "Recovery tests not yet supported on Fast EC";
+  }
   turn_balancing_off();
 
   std::string oid = "recovery_zeros";
@@ -459,6 +462,9 @@ TEST_P(SparseReadTest, RecoveryWithZerosDoesErrorInject) {
 
 // Test recovery scenario - mixed data and verify allocation state
 TEST_P(SparseReadTest, RecoveryMixedDataDoesErrorInject) {
+  if (pool_type == PoolType::FAST_EC) {
+    GTEST_SKIP() << "Recovery tests not yet supported on Fast EC";
+  }
   turn_balancing_off();
 
   std::string oid = "recovery_mixed";
@@ -497,6 +503,9 @@ TEST_P(SparseReadTest, RecoveryMixedDataDoesErrorInject) {
 
 // Test recovery after truncate
 TEST_P(SparseReadTest, RecoveryAfterTruncateDoesErrorInject) {
+  if (pool_type == PoolType::FAST_EC) {
+    GTEST_SKIP() << "Recovery tests not yet supported on Fast EC";
+  }
   turn_balancing_off();
 
   std::string oid = "recovery_truncate";
@@ -527,6 +536,9 @@ TEST_P(SparseReadTest, RecoveryAfterTruncateDoesErrorInject) {
 
 // Test recovery after zero operation
 TEST_P(SparseReadTest, RecoveryAfterZeroDoesErrorInject) {
+  if (pool_type == PoolType::FAST_EC) {
+    GTEST_SKIP() << "Recovery tests not yet supported on Fast EC";
+  }
   turn_balancing_off();
 
   std::string oid = "recovery_zero_op";
@@ -845,6 +857,9 @@ TEST_P(SparseReadTest, SequentialWrites) {
 
 // Test recovery after WRITEFULL operation
 TEST_P(SparseReadTest, RecoveryAfterWritefullDoesErrorInject) {
+  if (pool_type == PoolType::FAST_EC) {
+    GTEST_SKIP() << "Recovery tests not yet supported on Fast EC";
+  }
   turn_balancing_off();
 
   std::string oid = "recovery_writefull";
