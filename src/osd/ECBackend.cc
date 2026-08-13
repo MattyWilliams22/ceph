@@ -1636,12 +1636,12 @@ struct SparseReadCompleter final : ECCommon::ReadCompleter {
     *out_map = ECUtil::merge_shard_extent_maps(res.sparse_extents_read, sinfo);
     ldpp_dout(dpp, 20) << __func__ << ": hoid=" << hoid
       << " merged RO extent map (pre-clip)=" << *out_map << dendl;
-    // Clip the full-object extent map to the requested [offset, length] window.
-    // The fiemap was issued over the full shard extent so merge_shard_extent_maps
-    // may return extents outside [offset, offset+length]; strip those out.
+    // Clip the full-object extent map to the requested [offset, length] window,
+    // also clip the extent map to the logical object size.
     {
       const uint64_t req_offset = req.to_read.front().offset;
-      const uint64_t req_end    = req_offset + req.to_read.front().size;
+      const uint64_t req_end    = std::min(req_offset + req.to_read.front().size,
+                                           req.object_size);
       auto it = out_map->begin();
       while (it != out_map->end()) {
         const uint64_t ext_end = it->first + it->second;
@@ -1710,12 +1710,12 @@ struct SparseReadCompleter final : ECCommon::ReadCompleter {
     *out_map = ECUtil::merge_shard_extent_maps(res.sparse_extents_read, sinfo);
     ldpp_dout(dpp, 20) << __func__ << ": hoid=" << hoid
       << " merged RO extent map (pre-clip)=" << *out_map << dendl;
-    // Clip the full-object extent map to the requested [offset, length] window.
-    // The fiemap was issued over the full shard extent so merge_shard_extent_maps
-    // may return extents outside [offset, offset+length]; strip those out.
+    // Clip the full-object extent map to the requested [offset, length] window,
+    // also clip the extent map to the logical object size.
     {
       const uint64_t req_offset = req.to_read.front().offset;
-      const uint64_t req_end    = req_offset + req.to_read.front().size;
+      const uint64_t req_end    = std::min(req_offset + req.to_read.front().size,
+                                           req.object_size);
       auto it = out_map->begin();
       while (it != out_map->end()) {
         const uint64_t ext_end = it->first + it->second;
@@ -1828,10 +1828,9 @@ struct ECMapextCompleter final : ECCommon::ReadCompleter {
     auto merged = ECUtil::merge_shard_extent_maps(res.sparse_extents_read, sinfo);
     ldpp_dout(dpp, 20) << __func__ << ": hoid=" << hoid
       << " merged RO extent map=" << merged << dendl;
-    // Clamp results to the requested [offset, offset+length) range.
-    // EC pools round extents to stripe boundaries, so the merged map may
-    // extend before offset or past offset+length.
-    const uint64_t q_end = offset + length;
+    // Clip the full-object extent map to the requested [offset, length] window,
+    // also clip the extent map to the logical object size.
+    const uint64_t q_end = std::min(offset + length, req.object_size);
     for (auto &[ext_off, ext_len] : merged) {
       const uint64_t ext_end = ext_off + ext_len;
       if (ext_off >= q_end || ext_end <= offset)
