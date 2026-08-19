@@ -2601,10 +2601,6 @@ void PrimaryLogPG::do_op(OpRequestRef& op)
     m->clear_payload();
   }
 
-  if (coro_resumer && !*coro_resumer) {
-    coro_resumer = nullptr;
-  }
-
   if (coro_op_in_flight) {
     dout(20) << __func__ << ": coroutine op in flight, queuing " << op << dendl;
     waiting_for_coro_op.push_back(op);
@@ -2636,10 +2632,6 @@ void PrimaryLogPG::do_op(OpRequestRef& op)
 
     // Startup the coroutine
     (*coro_resumer)();
-
-    if (coro_resumer && !*coro_resumer) {
-      coro_resumer = nullptr;
-    }
   } else {
     // Handle the message directly in the current thread
     do_op_impl(op);
@@ -2649,6 +2641,7 @@ void PrimaryLogPG::do_op(OpRequestRef& op)
 void PrimaryLogPG::on_coroutine_complete()
 {
   ceph_assert(coro_op_in_flight);
+  coro_resumer = nullptr;
   coro_op_in_flight = false;
   active_coro_op = nullptr;
 
@@ -13351,12 +13344,7 @@ void PrimaryLogPG::on_change(ObjectStore::Transaction &t)
   dout(10) << __func__ << dendl;
 
   if (coro_resumer != nullptr) {
-    if (*coro_resumer) {
-      dout(20) << __func__ << ": Stopping active coroutine" << dendl;
-    } else {
-      dout(20) << __func__ << ": Cleaning up completed coroutine" << dendl;
-    }
-
+    dout(20) << __func__ << ": Stopping active coroutine" << dendl;
     coro_resumer = nullptr;
     coro_op_in_flight = false;
 
