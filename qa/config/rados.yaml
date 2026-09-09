@@ -10,6 +10,8 @@ overrides:
         osd mclock override recovery settings: true
         osd mclock profile: high_recovery_ops
         osd mclock skip benchmark: true
+        debug osd: 20
+        debug bluestore: 20
       mon:
         mon scrub interval: 300
         debug mon: 30
