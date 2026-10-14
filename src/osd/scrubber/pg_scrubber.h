@@ -653,7 +653,7 @@ class PgScrubber : public ScrubPgIF,
 
   void requeue_waiting() const
   {
-    m_pg->requeue_ops(m_pg->waiting_for_scrub, PG::OpWaitingList::SCRUB);
+    m_pg->requeue_ops(m_pg->waiting_for_scrub);
   }
 
   /// Modify the token identifying the current replica scrub operation

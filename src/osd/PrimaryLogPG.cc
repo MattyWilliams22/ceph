@@ -363,7 +363,7 @@ public:
 	  ctx->pg->osd->reply_op_error(ctx->op, r);
       } else if (results->should_requeue) {
 	if (ctx->op)
-	  ctx->pg->requeue_op(ctx->op, PrimaryLogPG::OpWaitingList::IN_PROGRESS);
+	  ctx->pg->requeue_op(ctx->op, PrimaryLogPG::OpGate::IN_PROGRESS);
       }
       ctx->pg->close_op_ctx(ctx);
     }
@@ -478,8 +478,7 @@ void PrimaryLogPG::on_local_recover(
       auto unreadable_object_entry = waiting_for_unreadable_object.find(hoid);
       if (unreadable_object_entry != waiting_for_unreadable_object.end()) {
 	dout(20) << " kicking unreadable waiters on " << hoid << dendl;
-	requeue_ops(unreadable_object_entry->second,
-		    OpWaitingList::UNREADABLE_OBJECT);
+	requeue_ops(unreadable_object_entry->second);
 	finish_unreadable_object(unreadable_object_entry->first);
 	waiting_for_unreadable_object.erase(unreadable_object_entry);
       }
@@ -512,9 +511,10 @@ void PrimaryLogPG::on_global_recover(
     // recover missing won't have had an obc, but it gets filled in
     // during on_local_recover
     ceph_assert(i->second);
-    list<OpRequestRef> requeue_list;
-    i->second->drop_recovery_read(&requeue_list);
-    requeue_ops(requeue_list, OpWaitingList::OBJECT_LOCK);
+    list<OpRequestRef> dropped;
+    i->second->drop_recovery_read(&dropped);
+    OpGateQueue requeue_list{OpGate::OBJECT_LOCK, std::move(dropped)};
+    requeue_ops(requeue_list);
   }
 
   backfills_in_flight.erase(soid);
@@ -525,15 +525,13 @@ void PrimaryLogPG::on_global_recover(
   auto degraded_object_entry = waiting_for_degraded_object.find(soid);
   if (degraded_object_entry != waiting_for_degraded_object.end()) {
     dout(20) << " kicking degraded waiters on " << soid << dendl;
-    requeue_ops(degraded_object_entry->second,
-                OpWaitingList::DEGRADED_OBJECT);
+    requeue_ops(degraded_object_entry->second);
     waiting_for_degraded_object.erase(degraded_object_entry);
   }
   auto unreadable_object_entry = waiting_for_unreadable_object.find(soid);
   if (unreadable_object_entry != waiting_for_unreadable_object.end()) {
     dout(20) << " kicking unreadable waiters on " << soid << dendl;
-    requeue_ops(unreadable_object_entry->second,
-                OpWaitingList::UNREADABLE_OBJECT);
+    requeue_ops(unreadable_object_entry->second);
     waiting_for_unreadable_object.erase(unreadable_object_entry);
   }
   finish_degraded_object(soid);
@@ -650,7 +648,8 @@ void PrimaryLogPG::wait_for_unreadable_object(
 {
   ceph_assert(is_unreadable_object(soid));
   maybe_kick_recovery(soid);
-  waiting_for_unreadable_object[soid].push_back(op);
+  waiting_for_unreadable_object.try_emplace(soid,
+    OpGate::UNREADABLE_OBJECT).first->second.push_back(op);
   op->mark_delayed("waiting for missing object");
   osd->logger->inc(l_osd_op_delayed_unreadable);
 }
@@ -710,7 +709,8 @@ void PrimaryLogPG::wait_for_degraded_object(const hobject_t& soid, OpRequestRef 
   ceph_assert(is_degraded_or_backfilling_object(soid) || is_degraded_on_async_recovery_target(soid));
 
   maybe_kick_recovery(soid);
-  waiting_for_degraded_object[soid].push_back(op);
+  waiting_for_degraded_object.try_emplace(soid,
+    OpGate::DEGRADED_OBJECT).first->second.push_back(op);
   op->mark_delayed("waiting for degraded object");
   osd->logger->inc(l_osd_op_delayed_degraded);
 }
@@ -802,7 +802,8 @@ bool PrimaryLogPG::maybe_await_blocked_head(
 void PrimaryLogPG::wait_for_blocked_object(const hobject_t& soid, OpRequestRef op)
 {
   dout(10) << __func__ << " " << soid << " " << *op->get_req() << dendl;
-  waiting_for_blocked_object[soid].push_back(op);
+  waiting_for_blocked_object.try_emplace(soid,
+    OpGate::BLOCKED_OBJECT).first->second.push_back(op);
   op->mark_delayed("waiting for blocked object");
 }
 
@@ -946,7 +947,7 @@ void PrimaryLogPG::recheck_readable()
     publish_stats_to_osd();
   }
   if (!is_laggy() && !is_wait()) {
-    requeue_ops(waiting_for_readable, OpWaitingList::READABLE);
+    requeue_ops(waiting_for_readable);
   }
 }
 
@@ -1771,7 +1772,8 @@ void PrimaryLogPG::release_object_locks(
         }
         waiting_for_scrub.splice(waiting_for_scrub.begin(), p.second);
       } else {
-        requeue_ops(p.second, OpWaitingList::OBJECT_LOCK);
+        OpGateQueue q{OpGate::OBJECT_LOCK, std::move(p.second)};
+        requeue_ops(q);
       }
     }
   }
@@ -2661,7 +2663,7 @@ void PrimaryLogPG::on_coroutine_complete()
 
   if (!waiting_for_coro_op.empty()) {
     dout(20) << __func__ << ": requeuing " << waiting_for_coro_op.size() << " ops" << dendl;
-    requeue_ops(waiting_for_coro_op, OpWaitingList::CORO);
+    requeue_ops(waiting_for_coro_op);
   }
 }
 
@@ -3239,7 +3241,8 @@ void PrimaryLogPG::do_proxy_read(OpRequestRef op, ObjectContextRef obc)
   fin->tid = tid;
   prdop->objecter_tid = tid;
   proxyread_ops[tid] = prdop;
-  in_progress_proxy_ops[soid].push_back(op);
+  in_progress_proxy_ops.try_emplace(soid, OpGate::IN_PROGRESS)
+                       .first->second.push_back(op);
 }
 
 void PrimaryLogPG::finish_proxy_read(hobject_t oid, ceph_tid_t tid, int r)
@@ -3265,13 +3268,13 @@ void PrimaryLogPG::finish_proxy_read(hobject_t oid, ceph_tid_t tid, int r)
   }
   proxyread_ops.erase(tid);
 
-  map<hobject_t, list<OpRequestRef>>::iterator q = in_progress_proxy_ops.find(oid);
+  auto q = in_progress_proxy_ops.find(oid);
   if (q == in_progress_proxy_ops.end()) {
     dout(10) << __func__ << " no in_progress_proxy_ops found" << dendl;
     return;
   }
   ceph_assert(q->second.size());
-  list<OpRequestRef>::iterator it = std::find(q->second.begin(),
+  auto it = std::find(q->second.begin(),
                                               q->second.end(),
 					      prdop->op);
   ceph_assert(it != q->second.end());
@@ -3300,13 +3303,13 @@ void PrimaryLogPG::finish_proxy_read(hobject_t oid, ceph_tid_t tid, int r)
 
 void PrimaryLogPG::kick_proxy_ops_blocked(hobject_t& soid)
 {
-  map<hobject_t, list<OpRequestRef>>::iterator p = in_progress_proxy_ops.find(soid);
+  auto p = in_progress_proxy_ops.find(soid);
   if (p == in_progress_proxy_ops.end())
     return;
 
-  list<OpRequestRef>& ls = p->second;
+  auto& ls = p->second;
   dout(10) << __func__ << " " << soid << " requeuing " << ls.size() << " requests" << dendl;
-  requeue_ops(ls, OpWaitingList::IN_PROGRESS);
+  requeue_ops(ls);
   in_progress_proxy_ops.erase(p);
 }
 
@@ -3344,13 +3347,13 @@ void PrimaryLogPG::cancel_proxy_ops(bool requeue, vector<ceph_tid_t> *tids)
   }
 
   if (requeue) {
-    map<hobject_t, list<OpRequestRef>>::iterator p =
+    auto p =
       in_progress_proxy_ops.begin();
     while (p != in_progress_proxy_ops.end()) {
-      list<OpRequestRef>& ls = p->second;
+      auto& ls = p->second;
       dout(10) << __func__ << " " << p->first << " requeuing " << ls.size()
 	       << " requests" << dendl;
-      requeue_ops(ls, OpWaitingList::IN_PROGRESS);
+      requeue_ops(ls);
       in_progress_proxy_ops.erase(p++);
     }
   } else {
@@ -3433,7 +3436,8 @@ void PrimaryLogPG::do_proxy_write(OpRequestRef op, ObjectContextRef obc)
   fin->tid = tid;
   pwop->objecter_tid = tid;
   proxywrite_ops[tid] = pwop;
-  in_progress_proxy_ops[soid].push_back(op);
+  in_progress_proxy_ops.try_emplace(soid, OpGate::IN_PROGRESS)
+                       .first->second.push_back(op);
 }
 
 void PrimaryLogPG::do_proxy_chunked_op(OpRequestRef op, const hobject_t& missing_oid,
@@ -3521,7 +3525,7 @@ public:
           ctx->pg->osd->reply_op_error(ctx->op, r);
       } else if (requeue) {
         if (ctx->op)
-          ctx->pg->requeue_op(ctx->op, PrimaryLogPG::OpWaitingList::IN_PROGRESS);
+          ctx->pg->requeue_op(ctx->op, PrimaryLogPG::OpGate::IN_PROGRESS);
       }
       ctx->pg->close_op_ctx(ctx);
     }
@@ -4017,7 +4021,8 @@ void PrimaryLogPG::do_proxy_chunked_read(OpRequestRef op, ObjectContextRef obc, 
   fin->tid = tid;
   prdop->objecter_tid = tid;
   proxyread_ops[tid] = prdop;
-  in_progress_proxy_ops[ori_soid].push_back(op);
+  in_progress_proxy_ops.try_emplace(ori_soid, OpGate::IN_PROGRESS)
+                       .first->second.push_back(op);
 }
 
 bool PrimaryLogPG::can_proxy_chunked_read(OpRequestRef op, ObjectContextRef obc)
@@ -4079,16 +4084,16 @@ void PrimaryLogPG::finish_proxy_write(hobject_t oid, ceph_tid_t tid, int r)
 
   proxywrite_ops.erase(tid);
 
-  map<hobject_t, list<OpRequestRef> >::iterator q = in_progress_proxy_ops.find(oid);
+  auto q = in_progress_proxy_ops.find(oid);
   if (q == in_progress_proxy_ops.end()) {
     dout(10) << __func__ << " no in_progress_proxy_ops found" << dendl;
     delete pwop->ctx;
     pwop->ctx = NULL;
     return;
   }
-  list<OpRequestRef>& in_progress_op = q->second;
+  auto& in_progress_op = q->second;
   ceph_assert(in_progress_op.size());
-  list<OpRequestRef>::iterator it = std::find(in_progress_op.begin(),
+  auto it = std::find(in_progress_op.begin(),
                                               in_progress_op.end(),
 					      pwop->op);
   ceph_assert(it != in_progress_op.end());
@@ -4195,7 +4200,7 @@ public:
 	  ctx->pg->osd->reply_op_error(ctx->op, r);
       } else if (results_data->should_requeue) {
 	if (ctx->op)
-	  ctx->pg->requeue_op(ctx->op, PrimaryLogPG::OpWaitingList::IN_PROGRESS);
+	  ctx->pg->requeue_op(ctx->op, PrimaryLogPG::OpGate::IN_PROGRESS);
       }
       ctx->pg->close_op_ctx(ctx);
     }
@@ -4264,7 +4269,7 @@ void PrimaryLogPG::promote_object(ObjectContextRef obc,
    * for this case we don't use DONTNEED.
    */
   unsigned src_fadvise_flags = LIBRADOS_OP_FLAG_FADVISE_SEQUENTIAL;
-  map<hobject_t, list<OpRequestRef>>::iterator q = in_progress_proxy_ops.find(obc->obs.oi.soid);
+  auto q = in_progress_proxy_ops.find(obc->obs.oi.soid);
   if (q == in_progress_proxy_ops.end()) {
     src_fadvise_flags |= LIBRADOS_OP_FLAG_FADVISE_DONTNEED;
   }
@@ -10510,7 +10515,7 @@ void PrimaryLogPG::finish_promote(int r, CopyResults *results,
     // pass error to everyone blocked on this object
     // FIXME: this is pretty sloppy, but at this point we got
     // something unexpected and don't have many other options.
-    map<hobject_t,list<OpRequestRef>>::iterator blocked_iter =
+    auto blocked_iter =
       waiting_for_blocked_object.find(soid);
     if (blocked_iter != waiting_for_blocked_object.end()) {
       while (!blocked_iter->second.empty()) {
@@ -10643,7 +10648,7 @@ void PrimaryLogPG::finish_promote_manifest(int r, CopyResults *results,
     // pass error to everyone blocked on this object
     // FIXME: this is pretty sloppy, but at this point we got
     // something unexpected and don't have many other options.
-    map<hobject_t,list<OpRequestRef>>::iterator blocked_iter =
+    auto blocked_iter =
       waiting_for_blocked_object.find(soid);
     if (blocked_iter != waiting_for_blocked_object.end()) {
       while (!blocked_iter->second.empty()) {
@@ -11365,7 +11370,7 @@ void PrimaryLogPG::finish_flush(hobject_t oid, ceph_tid_t tid, int r)
 
     if (!fop->dup_ops.empty()) {
       dout(20) << __func__ << " requeueing dups" << dendl;
-      requeue_ops(fop->dup_ops, OpWaitingList::IN_PROGRESS);
+      requeue_ops(fop->dup_ops);
     }
     if (fop->on_flush) {
       (*(fop->on_flush))();
@@ -11402,7 +11407,7 @@ int PrimaryLogPG::try_flush_mark_clean(FlushOpRef fop)
 
     if (!fop->dup_ops.empty()) {
       dout(20) << __func__ << " requeueing dups" << dendl;
-      requeue_ops(fop->dup_ops, OpWaitingList::IN_PROGRESS);
+      requeue_ops(fop->dup_ops);
     }
     if (fop->on_flush) {
       (*(fop->on_flush))();
@@ -11420,8 +11425,8 @@ int PrimaryLogPG::try_flush_mark_clean(FlushOpRef fop)
       m_scrubber->write_blocked_by_scrub(oid)) {
     if (fop->op) {
       dout(10) << __func__ << " blocked by scrub" << dendl;
-      requeue_op(fop->op, OpWaitingList::IN_PROGRESS);
-      requeue_ops(fop->dup_ops, OpWaitingList::IN_PROGRESS);
+      requeue_op(fop->op, OpGate::IN_PROGRESS);
+      requeue_ops(fop->dup_ops);
       return -EAGAIN;    // will retry
     } else {
       osd->logger->inc(l_osd_tier_try_flush_fail);
@@ -11532,11 +11537,11 @@ int PrimaryLogPG::try_flush_mark_clean(FlushOpRef fop)
 
   if (!fop->dup_ops.empty() || fop->op) {
     dout(20) << __func__ << " requeueing for " << ctx->at_version << dendl;
-    list<OpRequestRef> ls;
+    OpGateQueue ls{OpGate::IN_PROGRESS};
     if (fop->op)
       ls.push_back(fop->op);
     ls.splice(ls.end(), fop->dup_ops);
-    requeue_ops(ls, OpWaitingList::IN_PROGRESS);
+    requeue_ops(ls);
   }
 
   simple_opc_submit(std::move(ctx));
@@ -11572,8 +11577,8 @@ void PrimaryLogPG::cancel_flush(FlushOpRef fop, bool requeue,
   }
   if (requeue) {
     if (fop->op)
-      requeue_op(fop->op, OpWaitingList::IN_PROGRESS);
-    requeue_ops(fop->dup_ops, OpWaitingList::IN_PROGRESS);
+      requeue_op(fop->op, OpGate::IN_PROGRESS);
+    requeue_ops(fop->dup_ops);
   }
   if (fop->on_flush) {
     (*(fop->on_flush))();
@@ -11618,7 +11623,7 @@ void PrimaryLogPG::cancel_cls_gather(map<hobject_t,CLSGatherOp>::iterator iter, 
   cgop.ctx = NULL;
   if (requeue) {
     if (cgop.op)
-      requeue_op(cgop.op, OpWaitingList::IN_PROGRESS);
+      requeue_op(cgop.op, OpGate::IN_PROGRESS);
   }
   cls_gather_ops.erase(iter);
 }
@@ -12535,11 +12540,11 @@ void PrimaryLogPG::add_object_context_to_pg_stat(ObjectContextRef obc, pg_stat_t
 }
 
 void PrimaryLogPG::requeue_op_blocked_by_object(const hobject_t &soid) {
-  map<hobject_t, list<OpRequestRef>>::iterator p = waiting_for_blocked_object.find(soid);
+  auto p = waiting_for_blocked_object.find(soid);
   if (p != waiting_for_blocked_object.end()) {
-    list<OpRequestRef>& ls = p->second;
+    auto& ls = p->second;
     dout(10) << __func__ << " " << soid << " requeuing " << ls.size() << " requests" << dendl;
-    requeue_ops(ls, OpWaitingList::BLOCKED_OBJECT);
+    requeue_ops(ls);
     waiting_for_blocked_object.erase(p);
   }
 }
@@ -12854,9 +12859,10 @@ void PrimaryLogPG::on_failed_pull(
   ceph_assert(recovering.count(soid));
   auto obc = recovering[soid];
   if (obc) {
-    list<OpRequestRef> blocked_ops;
-    obc->drop_recovery_read(&blocked_ops);
-    requeue_ops(blocked_ops, OpWaitingList::OBJECT_LOCK);
+    list<OpRequestRef> dropped;
+    obc->drop_recovery_read(&dropped);
+    OpGateQueue blocked_ops{OpGate::OBJECT_LOCK, std::move(dropped)};
+    requeue_ops(blocked_ops);
   }
   recovering.erase(soid);
   for (auto&& i : from) {
@@ -13154,7 +13160,7 @@ void PrimaryLogPG::_split_into(pg_t child_pgid, PG *child, unsigned split_bits)
 
 void PrimaryLogPG::apply_and_flush_repops(bool requeue)
 {
-  list<OpRequestRef> rq;
+  OpGateQueue rq{OpGate::IN_PROGRESS};
 
   // apply all repops
   while (!repop_queue.empty()) {
@@ -13189,7 +13195,7 @@ void PrimaryLogPG::apply_and_flush_repops(bool requeue)
   ceph_assert(repop_queue.empty());
 
   if (requeue) {
-    requeue_ops(rq, OpWaitingList::IN_PROGRESS);
+    requeue_ops(rq);
     if (!waiting_for_ondisk.empty()) {
       for (auto& i : waiting_for_ondisk) {
         for (auto& j : i.second) {
@@ -13206,7 +13212,7 @@ void PrimaryLogPG::apply_and_flush_repops(bool requeue)
 
 void PrimaryLogPG::on_flushed()
 {
-  requeue_ops(waiting_for_flush, OpWaitingList::FLUSH);
+  requeue_ops(waiting_for_flush);
   if (!is_peered() || !is_primary()) {
     pair<hobject_t, ObjectContextRef> i;
     while (object_contexts.get_next(i.first, &i)) {
@@ -13293,7 +13299,7 @@ void PrimaryLogPG::on_activate_complete()
   check_local();
   // waiters
   if (!recovery_state.needs_flush()) {
-    requeue_ops(waiting_for_peered, OpWaitingList::PEERED);
+    requeue_ops(waiting_for_peered);
   } else if (!waiting_for_peered.empty()) {
     dout(10) << __func__ << " flushes in progress, moving "
 	     << waiting_for_peered.size()
@@ -13389,11 +13395,11 @@ void PrimaryLogPG::on_change(ObjectStore::Transaction &t)
 
   // requeue everything in the reverse order they should be
   // reexamined.
-  requeue_ops(waiting_for_peered, OpWaitingList::PEERED);
-  requeue_ops(waiting_for_flush, OpWaitingList::FLUSH);
-  requeue_ops(waiting_for_active, OpWaitingList::ACTIVE);
-  requeue_ops(waiting_for_readable, OpWaitingList::READABLE);
-  requeue_ops(waiting_for_coro_op, OpWaitingList::CORO);
+  requeue_ops(waiting_for_peered);
+  requeue_ops(waiting_for_flush);
+  requeue_ops(waiting_for_active);
+  requeue_ops(waiting_for_readable);
+  requeue_ops(waiting_for_coro_op);
 
   vector<ceph_tid_t> tids;
   cancel_copy_ops(is_primary(), &tids);
@@ -13408,17 +13414,16 @@ void PrimaryLogPG::on_change(ObjectStore::Transaction &t)
     release_backoffs(p.first);
   }
   if (is_primary()) {
-    requeue_object_waiters(waiting_for_unreadable_object,
-                           OpWaitingList::UNREADABLE_OBJECT);
+    requeue_object_waiters(waiting_for_unreadable_object);
   } else {
     waiting_for_unreadable_object.clear();
   }
-  for (map<hobject_t,list<OpRequestRef>>::iterator p = waiting_for_degraded_object.begin();
+  for (auto p = waiting_for_degraded_object.begin();
        p != waiting_for_degraded_object.end();
        waiting_for_degraded_object.erase(p++)) {
     release_backoffs(p->first);
     if (is_primary())
-      requeue_ops(p->second, OpWaitingList::DEGRADED_OBJECT);
+      requeue_ops(p->second);
     else
       p->second.clear();
     finish_degraded_object(p->first);
@@ -13430,7 +13435,7 @@ void PrimaryLogPG::on_change(ObjectStore::Transaction &t)
        p != waiting_for_blocked_object.end();
        waiting_for_blocked_object.erase(p++)) {
     if (is_primary())
-      requeue_ops(p->second, OpWaitingList::BLOCKED_OBJECT);
+      requeue_ops(p->second);
     else
       p->second.clear();
   }
@@ -13442,7 +13447,7 @@ void PrimaryLogPG::on_change(ObjectStore::Transaction &t)
   ceph_assert(callbacks_for_degraded_object.empty());
 
   if (is_primary()) {
-    requeue_ops(waiting_for_cache_not_full, OpWaitingList::CACHE_NOT_FULL);
+    requeue_ops(waiting_for_cache_not_full);
   } else {
     waiting_for_cache_not_full.clear();
   }
@@ -13454,12 +13459,12 @@ void PrimaryLogPG::on_change(ObjectStore::Transaction &t)
        in_progress_async_reads.erase(i++)) {
     close_op_ctx(i->second);
     if (is_primary())
-      requeue_op(i->first, OpWaitingList::IN_PROGRESS);
+      requeue_op(i->first, OpGate::IN_PROGRESS);
   }
   
   if (active_coro_op) {
     if (is_primary()) {
-      requeue_op(active_coro_op, OpWaitingList::IN_PROGRESS);
+      requeue_op(active_coro_op, OpGate::IN_PROGRESS);
     }
     active_coro_op = nullptr;
   }
@@ -13513,7 +13518,7 @@ void PrimaryLogPG::plpg_on_pool_change()
       !waiting_for_cache_not_full.empty()) {
     dout(10) << __func__ << " requeuing full waiters (not in writeback) "
 	     << dendl;
-    requeue_ops(waiting_for_cache_not_full, OpWaitingList::CACHE_NOT_FULL);
+    requeue_ops(waiting_for_cache_not_full);
     objects_blocked_on_cache_full.clear();
   }
   hit_set_setup();
@@ -13534,13 +13539,14 @@ void PrimaryLogPG::_clear_recovery_state()
     backfills_in_flight.erase(i++);
   }
 
-  list<OpRequestRef> blocked_ops;
   for (map<hobject_t, ObjectContextRef>::iterator i = recovering.begin();
        i != recovering.end();
        recovering.erase(i++)) {
     if (i->second) {
-      i->second->drop_recovery_read(&blocked_ops);
-      requeue_ops(blocked_ops, OpWaitingList::OBJECT_LOCK);
+      list<OpRequestRef> dropped;
+      i->second->drop_recovery_read(&dropped);
+      OpGateQueue blocked_ops{OpGate::OBJECT_LOCK, std::move(dropped)};
+      requeue_ops(blocked_ops);
     }
   }
   ceph_assert(backfills_in_flight.empty());
@@ -13555,23 +13561,22 @@ void PrimaryLogPG::cancel_pull(const hobject_t &soid)
   ceph_assert(recovering.count(soid));
   ObjectContextRef obc = recovering[soid];
   if (obc) {
-    list<OpRequestRef> blocked_ops;
-    obc->drop_recovery_read(&blocked_ops);
-    requeue_ops(blocked_ops, OpWaitingList::OBJECT_LOCK);
+    list<OpRequestRef> dropped;
+    obc->drop_recovery_read(&dropped);
+    OpGateQueue blocked_ops{OpGate::OBJECT_LOCK, std::move(dropped)};
+    requeue_ops(blocked_ops);
   }
   recovering.erase(soid);
   finish_recovery_op(soid);
   release_backoffs(soid);
   if (waiting_for_degraded_object.count(soid)) {
     dout(20) << " kicking degraded waiters on " << soid << dendl;
-    requeue_ops(waiting_for_degraded_object[soid],
-                OpWaitingList::DEGRADED_OBJECT);
+    requeue_ops(waiting_for_degraded_object.at(soid));
     waiting_for_degraded_object.erase(soid);
   }
   if (waiting_for_unreadable_object.count(soid)) {
     dout(20) << " kicking unreadable waiters on " << soid << dendl;
-    requeue_ops(waiting_for_unreadable_object[soid],
-                OpWaitingList::UNREADABLE_OBJECT);
+    requeue_ops(waiting_for_unreadable_object.at(soid));
     waiting_for_unreadable_object.erase(soid);
   }
   if (is_missing_object(soid))
@@ -15848,12 +15853,12 @@ bool PrimaryLogPG::agent_choose_mode(bool restart, OpRequestRef op)
     if (agent_state->evict_mode == TierAgentState::EVICT_MODE_FULL &&
 	is_active()) {
       if (op) {
-        requeue_op(op, OpWaitingList::IN_PROGRESS);
-        requeue_ops(waiting_for_flush, OpWaitingList::FLUSH);
-        requeue_ops(waiting_for_active, OpWaitingList::ACTIVE);
-        requeue_ops(waiting_for_readable, OpWaitingList::READABLE);
-        requeue_ops(waiting_for_scrub, OpWaitingList::SCRUB);
-        requeue_ops(waiting_for_cache_not_full, OpWaitingList::CACHE_NOT_FULL);
+        requeue_op(op, OpGate::IN_PROGRESS);
+        requeue_ops(waiting_for_flush);
+        requeue_ops(waiting_for_active);
+        requeue_ops(waiting_for_readable);
+        requeue_ops(waiting_for_scrub);
+        requeue_ops(waiting_for_cache_not_full);
         objects_blocked_on_cache_full.clear();
         requeued = true;
       }
@@ -16025,7 +16030,8 @@ int PrimaryLogPG::rep_repair_primary_object(const hobject_t& soid, OpContext *ct
   }
 
   // Restart the op after object becomes readable again
-  waiting_for_unreadable_object[soid].push_back(op);
+  waiting_for_unreadable_object.try_emplace(soid,
+    OpGate::UNREADABLE_OBJECT).first->second.push_back(op);
   op->mark_delayed("waiting for missing object");
 
   ceph_assert(is_clean());

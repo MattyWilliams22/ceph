@@ -1187,22 +1187,21 @@ void PG::filter_snapc(vector<snapid_t> &snaps)
 }
 
 void PG::requeue_object_waiters(
-  map<hobject_t, list<OpRequestRef>>& m,
-  OpWaitingList prev_queue)
+  map<hobject_t, OpGateQueue>& m)
 {
   for (auto it = m.begin(); it != m.end(); ++it)
-    requeue_ops(it->second, prev_queue);
+    requeue_ops(it->second);
   m.clear();
 }
 
-void PG::requeue_op(OpRequestRef op, OpWaitingList prev_queue)
+void PG::requeue_op(OpRequestRef op, OpGate prev_queue)
 {
   auto p = waiting_for_map.find(op->get_source());
   if (p != waiting_for_map.end()) {
     dout(20) << __func__ << " " << *op->get_req()
              << " (waiting_for_map " << p->first << ")"
              << dendl;
-    if (prev_queue < OpWaitingList::MAP) {
+    if (prev_queue < OpGate::MAP) {
       p->second.push_back(op);
     } else {
       p->second.push_front(op);
@@ -1211,7 +1210,7 @@ void PG::requeue_op(OpRequestRef op, OpWaitingList prev_queue)
     dout(20) << __func__ << " " << *op->get_req()
              << " (waiting_for_readable)" << dendl;
     op->mark_delayed("waiting for readable");
-    if (prev_queue < OpWaitingList::READABLE) {
+    if (prev_queue < OpGate::READABLE) {
       waiting_for_readable.push_back(op);
     } else {
       waiting_for_readable.push_front(op);
@@ -1219,7 +1218,7 @@ void PG::requeue_op(OpRequestRef op, OpWaitingList prev_queue)
   } else if (coro_op_in_flight) {
     dout(20) << __func__ << " " << *op->get_req()
              << " (waiting_for_coro_op)" << dendl;
-    if (prev_queue < OpWaitingList::CORO) {
+    if (prev_queue < OpGate::CORO) {
       waiting_for_coro_op.push_back(op);
     } else {
       waiting_for_coro_op.push_front(op);
@@ -1237,15 +1236,13 @@ void PG::requeue_op(OpRequestRef op, OpWaitingList prev_queue)
   }
 }
 
-void PG::requeue_ops(list<OpRequestRef> &ls, OpWaitingList prev_queue)
+void PG::requeue_ops(OpGateQueue& q)
 {
   list<OpRequestRef> to_requeue;
-  to_requeue.swap(ls);
+  q.swap(to_requeue);
 
-  for (list<OpRequestRef>::reverse_iterator i = to_requeue.rbegin();
-       i != to_requeue.rend();
-       ++i) {
-    requeue_op(*i, prev_queue);
+  for (auto i = to_requeue.rbegin(); i != to_requeue.rend(); ++i) {
+    requeue_op(*i, q.gate);
   }
 }
 
@@ -1350,7 +1347,7 @@ void PG::clear_want_pg_temp() {
 }
 
 void PG::on_role_change() {
-  requeue_ops(waiting_for_peered, OpWaitingList::PEERED);
+  requeue_ops(waiting_for_peered);
   plpg_on_role_change();
 }
 
@@ -1464,8 +1461,7 @@ Context* PG::on_clean()
     kick_snap_trim();
   }
   m_scrubber->on_primary_active_clean();
-  requeue_ops(waiting_for_clean_to_primary_repair,
-              OpWaitingList::PRIMARY_REPAIR);
+  requeue_ops(waiting_for_clean_to_primary_repair);
   return finish_recovery();
 }
 
@@ -1661,7 +1657,7 @@ void PG::on_activate_committed()
   if (!is_primary()) {
     // waiters
     if (recovery_state.needs_flush() == 0) {
-      requeue_ops(waiting_for_peered, OpWaitingList::PEERED);
+      requeue_ops(waiting_for_peered);
     } else if (!waiting_for_peered.empty()) {
       dout(10) << __func__ << " flushes in progress, moving "
 	       << waiting_for_peered.size() << " items to waiting_for_flush"

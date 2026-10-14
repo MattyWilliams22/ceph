@@ -1058,7 +1058,7 @@ protected:
    *     queues because we assume they cannot apply at that time (this is
    *     probably mostly true).
    *
-   *  3. The requeue_ops helper will push ops onto the waiting_for_map std::list if
+   *  3. The requeue_ops helper will push ops onto the waiting_for_map gate if
    *     it is non-empty.
    *
    * These three behaviors are generally sufficient to maintain ordering, with
@@ -1068,12 +1068,12 @@ protected:
    */
 
   /**
-   * Waiting lists along the request processing pipeline, in pipeline order.
+   * Pipeline gates through which an op must pass, in pipeline order.
    * Used by requeue_op/requeue_ops to decide whether a requeued op should
-   * be pushed to the front or back of a waiting list to maintain op ordering.
+   * be pushed to the front or back of a gate queue to maintain op ordering.
    */
-  enum class OpWaitingList : uint8_t {
-    MAP, // First waiting list
+  enum class OpGate : uint8_t {
+    MAP, // First gate
     PEERED,
     FLUSH,
     ACTIVE,
@@ -1085,8 +1085,54 @@ protected:
     BLOCKED_OBJECT,
     CACHE_NOT_FULL,
     OBJECT_LOCK,
-    PRIMARY_REPAIR, // Last waiting list
-    IN_PROGRESS, // Not on a waiting list. Op was being processed
+    PRIMARY_REPAIR, // Last gate
+    IN_PROGRESS, // Not held at a gate — op was already being processed
+  };
+
+  /**
+   * A queue of ops held at a specific pipeline gate.
+   * The gate identity is fixed at construction and cannot be separated
+   * from the queued ops; requeue_ops(OpGateQueue&) reads the gate from
+   * the struct so call sites do not repeat it.
+   */
+  struct OpGateQueue {
+    OpGate gate;
+
+    explicit OpGateQueue(OpGate g) : gate(g) {}
+    // adopt the contents of an existing plain list
+    OpGateQueue(OpGate g, std::list<OpRequestRef>&& l)
+      : gate(g), ops(std::move(l)) {}
+
+    void   push_back(OpRequestRef op)  { ops.push_back(std::move(op)); }
+    void   push_front(OpRequestRef op) { ops.push_front(std::move(op)); }
+    bool   empty() const               { return ops.empty(); }
+    size_t size()  const               { return ops.size(); }
+    void   clear()                     { ops.clear(); }
+    OpRequestRef& front()              { return ops.front(); }
+    void   pop_front()                 { ops.pop_front(); }
+    void swap(OpGateQueue& other)      { ops.swap(other.ops); }
+    void swap(std::list<OpRequestRef>& other) { ops.swap(other); }
+    using iterator = std::list<OpRequestRef>::iterator;
+    iterator begin()                   { return ops.begin(); }
+    iterator end()                     { return ops.end(); }
+    iterator erase(iterator pos)       { return ops.erase(pos); }
+    void splice(iterator pos, std::list<OpRequestRef>& other)
+    {
+      ops.splice(pos, other);
+    }
+    void splice(iterator pos, OpGateQueue& other)
+    {
+      std::list<OpRequestRef> tmp;
+      other.swap(tmp);
+      ops.splice(pos, tmp);
+    }
+
+    friend std::ostream& operator<<(std::ostream& out, const OpGateQueue& q) {
+      return out << q.ops;
+    }
+
+  private:
+    std::list<OpRequestRef> ops;
   };
 
   // ops with newer maps than our (or blocked behind them)
@@ -1095,25 +1141,25 @@ protected:
   std::unordered_map<entity_name_t,std::list<OpRequestRef>> waiting_for_map;
 
   // ops waiting on peered
-  std::list<OpRequestRef>            waiting_for_peered;
+  OpGateQueue waiting_for_peered{OpGate::PEERED};
 
   /// ops waiting on readble
-  std::list<OpRequestRef>            waiting_for_readable;
+  OpGateQueue waiting_for_readable{OpGate::READABLE};
 
   /// ops waiting for the in-flight EC coroutine op to complete
-  std::list<OpRequestRef>            waiting_for_coro_op;
+  OpGateQueue waiting_for_coro_op{OpGate::CORO};
   bool coro_op_in_flight = false;
 
   // ops waiting on active (require peered as well)
-  std::list<OpRequestRef>            waiting_for_active;
-  std::list<OpRequestRef>            waiting_for_flush;
-  std::list<OpRequestRef>            waiting_for_scrub;
+  OpGateQueue waiting_for_active{OpGate::ACTIVE};
+  OpGateQueue waiting_for_flush{OpGate::FLUSH};
+  OpGateQueue waiting_for_scrub{OpGate::SCRUB};
 
-  std::list<OpRequestRef>            waiting_for_cache_not_full;
-  std::list<OpRequestRef>            waiting_for_clean_to_primary_repair;
-  std::map<hobject_t, std::list<OpRequestRef>> waiting_for_unreadable_object,
-			     waiting_for_degraded_object,
-			     waiting_for_blocked_object;
+  OpGateQueue waiting_for_cache_not_full{OpGate::CACHE_NOT_FULL};
+  OpGateQueue waiting_for_clean_to_primary_repair{OpGate::PRIMARY_REPAIR};
+  std::map<hobject_t, OpGateQueue> waiting_for_unreadable_object,
+  	     waiting_for_degraded_object,
+  	     waiting_for_blocked_object;
 
   std::set<hobject_t> objects_blocked_on_cache_full;
   std::map<hobject_t,snapid_t> objects_blocked_on_degraded_snap;
@@ -1129,13 +1175,10 @@ protected:
 		   std::vector<pg_log_op_return_item_t>>>> waiting_for_ondisk;
 
   void requeue_object_waiters(
-    std::map<hobject_t, std::list<OpRequestRef>>& m,
-    OpWaitingList prev_queue);
+    std::map<hobject_t, OpGateQueue>& m);
   void requeue_op(
-    OpRequestRef op, OpWaitingList prev_queue);
-  void requeue_ops(
-    std::list<OpRequestRef> &l,
-    OpWaitingList prev_queue);
+    OpRequestRef op, OpGate prev_queue);
+  void requeue_ops(OpGateQueue& q);
 
   // stats that persist lazily
   object_stat_collection_t unstable_stats;

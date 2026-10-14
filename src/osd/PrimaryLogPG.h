@@ -245,7 +245,7 @@ public:
   struct FlushOp {
     ObjectContextRef obc;       ///< obc we are flushing
     OpRequestRef op;            ///< initiating op
-    std::list<OpRequestRef> dup_ops; ///< bandwagon jumpers
+    OpGateQueue dup_ops{OpGate::IN_PROGRESS}; ///< bandwagon jumpers
     version_t flushed_version;  ///< user version we are flushing
     ceph_tid_t objecter_tid;    ///< copy-from request tid
     int rval;                   ///< copy-from result
@@ -1477,7 +1477,7 @@ protected:
   std::pair<int, std::unique_ptr<const PGLSFilter>> get_pgls_filter(
     ceph::buffer::list::const_iterator& iter);
 
-  std::map<hobject_t, std::list<OpRequestRef>> in_progress_proxy_ops;
+  std::map<hobject_t, OpGateQueue> in_progress_proxy_ops;
   void kick_proxy_ops_blocked(hobject_t& soid);
   void cancel_proxy_ops(bool requeue, std::vector<ceph_tid_t> *tids);
 
