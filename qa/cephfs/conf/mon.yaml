@@ -8,3 +8,5 @@ overrides:
     conf:
       mon:
         mon down mkfs grace: 300
+        debug mon: 20
+        debug paxos: 20
