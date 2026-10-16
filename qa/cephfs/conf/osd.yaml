@@ -3,3 +3,5 @@ overrides:
     cluster-conf:
       osd:
         osd op complaint time: 180
+        debug osd: 20
+        debug bluestore: 20
