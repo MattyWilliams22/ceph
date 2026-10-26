@@ -3859,7 +3859,7 @@ bs::error_code Objecter::process_op_reply_handlers(Op *op, vector<OSDOp> &out_op
 	} else if (p->rval < 0) {
 	  e = bs::error_code(-p->rval, osd_category());
 	}
-	std::move((*ph))(e, p->rval, p->outdata);
+	std::move((*ph))(e, p->rval, osd_reply_bl{p->outmetadata, p->outdata});
       } catch (const bs::system_error& e) {
 	ldout(cct, 10) << "ERROR: tid " << op->tid << ": handler function threw "
 		       << e.what() << dendl;
