@@ -47,11 +47,12 @@ Synopsis
 ::
 
     ceph_test_rados
-        --op <read|write|write_excl|writesame|delete|snap_create|snap_remove|
+        --op <read|write|write_excl|writesame|zero|write_zeros|delete|
+              snap_create|snap_remove|
               rollback|setattr|rmattr|watch|copy_from|hit_set_list|is_dirty|
               undirty|cache_flush|cache_try_flush|cache_evict|append|append_excl|
               set_redirect|unset_redirect|chunk_read|tier_promote|tier_flush|
-              set_chunk|tier_evict> <weight>
+              set_chunk|tier_evict|mapext> <weight>
         [--op <operation_type> <weight> ...]
         [--pool <pool_name>]
         [--max-ops <op_count>]
@@ -141,10 +142,12 @@ For erasure-coded pools:
 
 - ``write``, ``write_excl`` and ``writesame`` require
   ``allow_ec_overwrites``.
-- Sparse reads (part of ``read``) need the pool to report allocation
-  accurately, which erasure-coded pools cannot do yet, so they are disabled
-  on erasure-coded pools as if ``--no-sparse`` had been given. Normal reads
-  continue.
+- ``zero``, ``write_zeros`` and ``mapext`` need the pool to report
+  allocation accurately, which erasure-coded pools cannot do yet. They are
+  always skipped on erasure-coded pools.
+- Sparse reads (part of ``read``) have the same requirement, so they are
+  disabled on erasure-coded pools as if ``--no-sparse`` had been given.
+  Normal reads continue.
 - Omap is disabled when the pool does not report ``supports_omap``.
 
 If no operations remain after filtering, the tool prints an error and
@@ -289,6 +292,16 @@ weight 50.
    * - ``writesame``
      - ``allow_ec_overwrites``
      - Write same data pattern across an extent.
+   * - ``zero``
+     - not supported
+     - Zero a random extent of an object.
+   * - ``write_zeros``
+     - not supported
+     - Write an extent of explicit zero data.
+   * - ``mapext``
+     - not supported
+     - Query the allocated extents of an object and verify them against
+       the model.
    * - ``delete``
      - none
      - Delete an object.

@@ -91,7 +91,10 @@ def task(ctx, config):
               snap_remove, rollback, setattr, rmattr, watch, copy_from,
               hit_set_list, is_dirty, undirty, cache_flush, cache_try_flush,
               cache_evict, append, set_chunk, tier_promote, tier_evict,
-              tier_flush.
+              tier_flush, zero, write_zeros, mapext.
+              ``zero``, ``write_zeros`` and ``mapext`` need the pool to
+              report allocation accurately, which erasure coded pools cannot
+              do yet, so they are skipped on EC pools.
               ceph_test_rados detects what the pool supports at startup and
               drops any op whose requirements are not met.
           runs: <number of times to run> - the pool is remade between runs
@@ -370,7 +373,10 @@ def task(ctx, config):
         "tier_promote",
         "tier_evict",
         "tier_promote",
-        "tier_flush"
+        "tier_flush",
+        "zero",
+        "write_zeros",
+        "mapext",
         ]:
         if field in op_weights:
             weights[field] = op_weights[field]

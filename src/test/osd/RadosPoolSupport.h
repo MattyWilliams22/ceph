@@ -50,8 +50,8 @@
 enum PoolSupport : unsigned {
   SUPPORT_EC_OVERWRITES       = 1u << 0,
   SUPPORT_EC_OPTIMIZATIONS    = 1u << 1,
-  /// The OSD reports and preserves allocation accurately (needed by sparse
-  /// reads, among others).  EC pools cannot do this yet.
+  /// The OSD reports and preserves allocation accurately (sparse reads,
+  /// mapext, zero, write_zeros).  EC pools cannot do this yet.
   SUPPORT_ALLOCATION_TRACKING = 1u << 2,
   SUPPORT_OMAP                = 1u << 3,
 };

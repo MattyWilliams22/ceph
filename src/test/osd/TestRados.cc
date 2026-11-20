@@ -293,6 +293,13 @@ private:
 	   << context.current_snap << std::endl;
       return new WriteSameOp(m_op, &context, oid, m_stats);
 
+    case TEST_OP_ZERO:
+      oid = *(rand_choose(context.oid_not_in_use));
+      context.cout_prefix() << m_op << ": " << "zero oid "
+           << oid << " current snap is "
+           << context.current_snap << std::endl;
+      return new ZeroOp(m_op, &context, oid, m_stats);
+
     case TEST_OP_DELETE:
       oid = *(rand_choose(context.oid_not_in_use));
       context.cout_prefix() << m_op << ": " << "delete oid " << oid << " current snap is "
@@ -440,6 +447,18 @@ private:
       context.cout_prefix() << m_op << ": " << "tier_evict oid " << oid << std::endl;
       return new TierEvictOp(m_op, &context, oid, m_stats);
 
+    case TEST_OP_MAPEXT:
+      oid = *(rand_choose(context.oid_not_in_use));
+      context.cout_prefix() << m_op << ": " << "mapext oid " << oid << std::endl;
+      return new MapextOp(m_op, &context, oid, m_stats);
+
+    case TEST_OP_WRITE_ZEROS:
+      oid = *(rand_choose(context.oid_not_in_use));
+      context.cout_prefix() << m_op << ": " << "write_zeros oid "
+           << oid << " current snap is "
+           << context.current_snap << std::endl;
+      return new WriteZeroDataOp(m_op, &context, oid, m_stats);
+
     case NUM_TEST_OP_TYPES:
       break;
     }
@@ -490,6 +509,7 @@ static constexpr OpTypeInfo op_types[] = {
   { TEST_OP_WRITE, "write", SUPPORT_WRITE },
   { TEST_OP_WRITE_EXCL, "write_excl", SUPPORT_WRITE },
   { TEST_OP_WRITESAME, "writesame", SUPPORT_WRITE },
+  { TEST_OP_ZERO, "zero", SUPPORT_WRITE | SUPPORT_ALLOCATION_TRACKING },
   { TEST_OP_DELETE, "delete", SUPPORT_NONE },
   { TEST_OP_SNAP_CREATE, "snap_create", SUPPORT_NONE },
   { TEST_OP_SNAP_REMOVE, "snap_remove", SUPPORT_NONE },
@@ -513,6 +533,8 @@ static constexpr OpTypeInfo op_types[] = {
   { TEST_OP_TIER_FLUSH, "tier_flush", SUPPORT_NONE },
   { TEST_OP_SET_CHUNK, "set_chunk", SUPPORT_NONE },
   { TEST_OP_TIER_EVICT, "tier_evict", SUPPORT_NONE },
+  { TEST_OP_MAPEXT, "mapext", SUPPORT_ALLOCATION_TRACKING },
+  { TEST_OP_WRITE_ZEROS, "write_zeros", SUPPORT_WRITE | SUPPORT_ALLOCATION_TRACKING },
 };
 
 // Forgetting the table row for a new TestOpType fails the build here.
@@ -539,11 +561,12 @@ static const PoolFeatureRequirement pool_features[] = {
 void usage(const char *prog)
 {
   cout << "Usage: " << prog << std::endl;
-  cout << "        --op <read|write|write_excl|writesame|delete|snap_create|snap_remove|" << std::endl;
+  cout << "        --op <read|write|write_excl|writesame|zero|write_zeros|delete|" << std::endl;
+  cout << "              snap_create|snap_remove|" << std::endl;
   cout << "              rollback|setattr|rmattr|watch|copy_from|hit_set_list|is_dirty|" << std::endl;
   cout << "              undirty|cache_flush|cache_try_flush|cache_evict|append|append_excl|" << std::endl;
   cout << "              set_redirect|unset_redirect|chunk_read|tier_promote|tier_flush|" << std::endl;
-  cout << "              set_chunk|tier_evict> <weight>" << std::endl;
+  cout << "              set_chunk|tier_evict|mapext> <weight>" << std::endl;
   cout << "        [--op <operation_type> <weight> ...]" << std::endl;
   cout << "        [--pool <pool_name>]" << std::endl;
   cout << "        [--max-ops <op_count>]" << std::endl;
